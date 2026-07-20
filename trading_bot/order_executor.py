@@ -41,6 +41,17 @@ class OrderExecutor:
                 return None
             raise OrderExecutionError(f"Failed to fetch position for {symbol}: {exc}") from exc
 
+    def get_all_positions(self) -> dict[str, Position]:
+        """Fetches every open position in a single call -- used instead of
+        get_open_position() per symbol when scanning a large watchlist, so a
+        100-symbol scan costs one request instead of up to 100.
+        """
+        try:
+            positions = self._client.get_all_positions()
+        except APIError as exc:
+            raise OrderExecutionError(f"Failed to fetch open positions: {exc}") from exc
+        return {position.symbol: position for position in positions}
+
     def submit_bracket_buy(self, symbol: str, qty: int, prices: BracketPrices) -> Order:
         order_request = MarketOrderRequest(
             symbol=symbol,

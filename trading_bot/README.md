@@ -11,10 +11,11 @@ Vollautomatischer, modularer Trading-Bot fuer Alpaca (Paper-Trading zuerst).
 | Datei | Verantwortlichkeit |
 |---|---|
 | `config.py` | Laedt alle Parameter aus `.env` (Keys, Watchlist, Strategie- und Risikoparameter). |
+| `nasdaq100.py` | Statische Nasdaq-100-Tickerliste (manuell pflegen, siehe unten). |
 | `indicators.py` | Reine SMA/EMA/RSI/MACD-Berechnung (pandas, keine externen TA-Libs). |
 | `strategy.py` | Kombiniert Trendfilter (SMA-Crossover), MACD-Crossover und RSI zu BUY/SELL/HOLD inkl. Begruendung. |
 | `risk_manager.py` | Positionsgroesse (% des Kapitals), Stop-Loss/Take-Profit-Preise, Tagesverlust-Limit. |
-| `data_feed.py` | Alpaca Marktdaten (historische Bars, Market Clock). |
+| `data_feed.py` | Alpaca Marktdaten (historische Bars per Batch-Requests, Market Clock). |
 | `order_executor.py` | Alpaca Order-Ausfuehrung (Bracket-Orders mit SL/TP, Positionen schliessen). |
 | `trade_logger.py` | Schreibt jede Entscheidung (inkl. HOLD/Begruendung) in eine CSV-Datei. |
 | `bot.py` | Haupt-Loop: Marktzeiten pruefen, Watchlist durchgehen, Fehlerbehandlung pro Symbol. |
@@ -61,6 +62,34 @@ geoeffnet ist. Mit `Strg+C` sauber beenden.
 
 Alle Parameter (SMA/RSI/MACD-Perioden, Timeframe, Intervall) sind ueber `.env` anpassbar.
 
+## Watchlist: feste Liste oder Nasdaq-100
+
+Standardmaessig nutzt der Bot die feste `WATCHLIST` aus `.env`. Mit
+`USE_NASDAQ100=true` scannt er stattdessen die komplette Nasdaq-100-Liste aus
+`nasdaq100.py` (WATCHLIST wird in dem Fall ignoriert). Die Liste ist bewusst
+statisch (kein Web-Scraping zur Laufzeit) und sollte gelegentlich manuell
+gegen eine aktuelle, offizielle Quelle abgeglichen werden, da sich die
+Zusammensetzung durch die jaehrliche Reconstitution im Dezember sowie durch
+Uebernahmen/Delistings aendert — Details dazu stehen im Docstring der Datei.
+
+### Effizienz bei ~100 Symbolen
+
+Bei aktivem `USE_NASDAQ100` waeren pro Zyklus naiv ~200 einzelne API-Calls
+noetig (Bars + Position pro Symbol). Stattdessen:
+
+- **Positionen:** ein einziger `get_all_positions()`-Call statt einem pro Symbol.
+- **Kursdaten:** `get_bars_batch()` fasst mehrere Symbole in einer einzigen
+  Anfrage zusammen (Anzahl steuerbar ueber `DATA_BATCH_SIZE`, Standard 30) und
+  pausiert zwischen den Batches (`DATA_BATCH_PAUSE_SECONDS`), um Alpacas
+  Rate-Limits nicht zu sprengen. Da Alpacas `limit`-Parameter bei Multi-Symbol-Requests
+  die Gesamtzahl der Bars *ueber alle Symbole* im Request begrenzt (nicht pro
+  Symbol), skaliert `get_bars_batch()` den angefragten Limit-Wert intern
+  entsprechend der Batch-Groesse hoch und kuerzt danach pro Symbol wieder auf
+  die benoetigte Anzahl.
+- Damit sinkt ein voller Nasdaq-100-Durchlauf auf ca. 4-7 HTTP-Requests pro
+  Zyklus (1x Clock, 1x Account, 1x Positionen, ~3-4x Kursdaten-Batches) und
+  bleibt damit weit unter jedem sinnvollen `CHECK_INTERVAL_MINUTES`.
+
 ## Risikomanagement
 
 - **Positionsgroesse:** `POSITION_SIZE_PCT` % des Account-Equity pro Trade (nach oben durch verfuegbare Buying Power begrenzt).
@@ -72,8 +101,17 @@ Alle Parameter (SMA/RSI/MACD-Perioden, Timeframe, Intervall) sind ueber `.env` a
 Jede Entscheidung (BUY, SELL, HOLD, HALT, ERROR) wird mit Zeitstempel, Symbol,
 Menge, Preis, SL/TP, Order-ID und **Begruendung** (welche Indikatoren was
 gezeigt haben) in `trades.csv` (Pfad ueber `TRADE_LOG_PATH` konfigurierbar)
-angehaengt. Fehler/Systemmeldungen laufen zusaetzlich ueber Pythons `logging`
-auf der Konsole.
+angehaengt — bei 100 Symbolen entsprechend 100 Zeilen pro Zyklus, das ist so
+gewollt (vollstaendiges Audit-Log).
+
+Auf der Konsole (Python `logging`) wird das bewusst kompakt gehalten, damit
+ein 100-Symbol-Durchlauf nicht zuspammt: einzelne HOLD-Entscheidungen werden
+dort **nicht** ausgegeben, nur tatsaechlich ausgefuehrte BUY/SELL-Trades sowie
+eine Zusammenfassung am Ende jedes Zyklus, z. B.
+
+```
+Cycle complete (2.8s, 99 symbols): 2 BUY, 1 SELL, 95 HOLD, 1 ERROR
+```
 
 ## Fehlerbehandlung
 

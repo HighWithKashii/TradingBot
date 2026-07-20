@@ -2,6 +2,13 @@
 trade logger together. Handles API failures per-symbol so one bad request
 doesn't take down the whole watchlist scan, and enforces the daily loss
 limit before any new entries are considered.
+
+Positions and bars for the whole watchlist are fetched once per cycle in
+bulk (one get_all_positions() call, a handful of chunked get_bars_batch()
+calls) instead of per symbol, so scanning ~100 Nasdaq-100 names doesn't
+turn into ~200 individual API requests. Per-symbol HOLD decisions are only
+written to trades.csv; the console gets one summary line per cycle instead
+of one line per symbol.
 """
 
 from __future__ import annotations
@@ -37,9 +44,9 @@ class TradingBot:
 
     def run_forever(self) -> None:
         logger.info(
-            "Starting bot (%s trading) — watchlist=%s, interval=%s min",
+            "Starting bot (%s trading) — %d symbols in watchlist, interval=%s min",
             "paper" if self._config.paper else "LIVE",
-            self._config.watchlist,
+            len(self._config.watchlist),
             self._config.check_interval_minutes,
         )
         while True:
@@ -52,6 +59,7 @@ class TradingBot:
             time.sleep(self._config.check_interval_minutes * 60)
 
     def run_cycle(self) -> None:
+        cycle_start = time.monotonic()
         try:
             if not self._data_feed.is_market_open():
                 logger.info("Market is closed — skipping cycle.")
@@ -78,34 +86,61 @@ class TradingBot:
             )
             return
 
-        for symbol in self._config.watchlist:
-            try:
-                self._process_symbol(symbol, equity, buying_power)
-            except OrderExecutionError as exc:
-                logger.error("Order/account error for %s: %s", symbol, exc)
-                self._trade_logger.log(symbol=symbol, action="ERROR", reason=str(exc), status="error")
-            except Exception as exc:
-                logger.exception("Unexpected error while processing %s", symbol)
-                self._trade_logger.log(symbol=symbol, action="ERROR", reason=repr(exc), status="error")
+        watchlist = self._config.watchlist
 
-    def _process_symbol(self, symbol: str, equity: float, buying_power: float) -> None:
-        position = self._executor.get_open_position(symbol)
-
-        bars = self._data_feed.get_bars(symbol, limit=self._config.min_bars_required + 10)
-        if bars.empty:
-            self._trade_logger.log(symbol=symbol, action="HOLD", reason="No market data returned.")
+        try:
+            positions = self._executor.get_all_positions()
+        except OrderExecutionError as exc:
+            logger.error("Could not fetch open positions — skipping cycle: %s", exc)
             return
 
-        df = compute_indicators(bars, self._config)
-        signal = generate_signal(df, self._config, has_open_position=position is not None)
-        price = float(df.iloc[-1]["close"])
+        bars_by_symbol = self._data_feed.get_bars_batch(watchlist, limit=self._config.min_bars_required + 10)
 
-        if signal.action == Action.BUY:
-            self._enter_long(symbol, price, equity, buying_power, signal.reason)
-        elif signal.action == Action.SELL:
-            self._exit_long(symbol, position, price, signal.reason)
-        else:
-            self._trade_logger.log(symbol=symbol, action="HOLD", reason=signal.reason, price=price)
+        counts = {"BUY": 0, "SELL": 0, "HOLD": 0, "ERROR": 0}
+        for symbol in watchlist:
+            action = self._process_symbol(
+                symbol, bars_by_symbol.get(symbol), positions.get(symbol), equity, buying_power
+            )
+            counts[action] = counts.get(action, 0) + 1
+
+        elapsed = time.monotonic() - cycle_start
+        logger.info(
+            "Cycle complete (%.1fs, %d symbols): %d BUY, %d SELL, %d HOLD, %d ERROR",
+            elapsed,
+            len(watchlist),
+            counts["BUY"],
+            counts["SELL"],
+            counts["HOLD"],
+            counts["ERROR"],
+        )
+
+    def _process_symbol(self, symbol, bars, position, equity: float, buying_power: float) -> str:
+        try:
+            if bars is None or bars.empty:
+                self._trade_logger.log(symbol=symbol, action="HOLD", reason="No market data returned.")
+                return "HOLD"
+
+            df = compute_indicators(bars, self._config)
+            signal = generate_signal(df, self._config, has_open_position=position is not None)
+            price = float(df.iloc[-1]["close"])
+
+            if signal.action == Action.BUY:
+                self._enter_long(symbol, price, equity, buying_power, signal.reason)
+                return "BUY"
+            elif signal.action == Action.SELL:
+                self._exit_long(symbol, position, price, signal.reason)
+                return "SELL"
+            else:
+                self._trade_logger.log(symbol=symbol, action="HOLD", reason=signal.reason, price=price)
+                return "HOLD"
+        except OrderExecutionError as exc:
+            logger.error("Order/account error for %s: %s", symbol, exc)
+            self._trade_logger.log(symbol=symbol, action="ERROR", reason=str(exc), status="error")
+            return "ERROR"
+        except Exception as exc:
+            logger.exception("Unexpected error while processing %s", symbol)
+            self._trade_logger.log(symbol=symbol, action="ERROR", reason=repr(exc), status="error")
+            return "ERROR"
 
     def _enter_long(self, symbol: str, price: float, equity: float, buying_power: float, reason: str) -> None:
         qty = self._risk_manager.calculate_position_size(equity, buying_power, price)

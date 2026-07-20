@@ -24,6 +24,19 @@ from trading_bot.risk_manager import RiskManager
 from trading_bot.strategy import Action, compute_indicators, generate_signal
 from trading_bot.trade_logger import TradeLogger
 
+try:
+    from colorama import Fore, Style
+    from colorama import init as _colorama_init
+
+    _colorama_init()
+except ImportError:  # colorama not installed -> plain, uncolored output
+    class _NoColor:
+        def __getattr__(self, _name: str) -> str:
+            return ""
+
+    Fore = _NoColor()
+    Style = _NoColor()
+
 logger = logging.getLogger("trading_bot")
 
 
@@ -43,10 +56,12 @@ class TradingBot:
         self._trade_logger = trade_logger
 
     def run_forever(self) -> None:
+        source = "Nasdaq-100" if self._config.use_nasdaq100 else "fixed list"
         logger.info(
-            "Starting bot (%s trading) — %d symbols in watchlist, interval=%s min",
+            "Starting bot (%s trading) — watchlist: %d symbols (%s), interval=%s min",
             "paper" if self._config.paper else "LIVE",
             len(self._config.watchlist),
+            source,
             self._config.check_interval_minutes,
         )
         while True:
@@ -104,15 +119,10 @@ class TradingBot:
             counts[action] = counts.get(action, 0) + 1
 
         elapsed = time.monotonic() - cycle_start
-        logger.info(
-            "Cycle complete (%.1fs, %d symbols): %d BUY, %d SELL, %d HOLD, %d ERROR",
-            elapsed,
-            len(watchlist),
-            counts["BUY"],
-            counts["SELL"],
-            counts["HOLD"],
-            counts["ERROR"],
-        )
+        summary = f"{counts['BUY']} BUY, {counts['SELL']} SELL, {counts['HOLD']} HOLD"
+        if counts["ERROR"]:
+            summary += f", {counts['ERROR']} ERROR"
+        logger.info("Scan complete: %s (duration: %.1fs)", summary, elapsed)
 
     def _process_symbol(self, symbol, bars, position, equity: float, buying_power: float) -> str:
         try:
@@ -156,7 +166,10 @@ class TradingBot:
 
         prices = self._risk_manager.calculate_bracket_prices(price)
         order = self._executor.submit_bracket_buy(symbol, qty, prices)
-        logger.info("BUY %s x%d @ ~%.2f (SL %.2f / TP %.2f)", symbol, qty, price, prices.stop_loss, prices.take_profit)
+        logger.info(
+            f"{Fore.GREEN}BUY {symbol} x{qty} @ ~{price:.2f} "
+            f"(SL {prices.stop_loss:.2f} / TP {prices.take_profit:.2f}) — {reason}{Style.RESET_ALL}"
+        )
         self._trade_logger.log(
             symbol=symbol,
             action="BUY",
@@ -180,7 +193,10 @@ class TradingBot:
         qty = float(position.qty)
         order = self._executor.close_position(symbol)
         self._risk_manager.register_realized_pnl(realized_pnl)
-        logger.info("SELL/close %s x%s @ ~%.2f (est. P&L %.2f)", symbol, qty, price, realized_pnl)
+        logger.info(
+            f"{Fore.RED}SELL {symbol} x{qty:g} @ ~{price:.2f} "
+            f"(est. P&L {realized_pnl:.2f}) — {reason}{Style.RESET_ALL}"
+        )
         self._trade_logger.log(
             symbol=symbol,
             action="SELL",

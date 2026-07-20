@@ -106,12 +106,22 @@ gewollt (vollstaendiges Audit-Log).
 
 Auf der Konsole (Python `logging`) wird das bewusst kompakt gehalten, damit
 ein 100-Symbol-Durchlauf nicht zuspammt: einzelne HOLD-Entscheidungen werden
-dort **nicht** ausgegeben, nur tatsaechlich ausgefuehrte BUY/SELL-Trades sowie
-eine Zusammenfassung am Ende jedes Zyklus, z. B.
+dort **nicht** ausgegeben. Stattdessen:
 
-```
-Cycle complete (2.8s, 99 symbols): 2 BUY, 1 SELL, 95 HOLD, 1 ERROR
-```
+- **Beim Start** nur die Watchlist-Groesse und -Quelle, nicht jedes einzelne Symbol:
+  ```
+  Starting bot (paper trading) — watchlist: 99 symbols (Nasdaq-100), interval=15 min
+  ```
+- **Pro BUY/SELL** sofort eine ausfuehrliche Zeile mit Symbol, Preis und Begruendung
+  (BUY gruen, SELL rot eingefaerbt via `colorama`, faellt automatisch auf unformatierten
+  Text zurueck falls `colorama` nicht installiert ist):
+  ```
+  BUY AAPL x12 @ ~172.30 (SL 168.85 / TP 179.19) — Uptrend (SMA50 ... > SMA200 ...), MACD bullish crossover ..., RSI ...
+  ```
+- **Nach jedem Scan** eine Zusammenfassungszeile statt einer Zeile pro Symbol:
+  ```
+  Scan complete: 2 BUY, 1 SELL, 95 HOLD, 1 ERROR (duration: 45.3s)
+  ```
 
 ## Fehlerbehandlung
 

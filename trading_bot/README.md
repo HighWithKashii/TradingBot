@@ -167,6 +167,14 @@ dort **nicht** ausgegeben. Stattdessen:
 - Bei unklaren/widerspruechlichen Signalen wird keine Order ausgeloest (HOLD).
 - Ein einzelner API-Ausfall beendet nicht den gesamten Bot — nur der aktuelle
   Zyklus wird uebersprungen, danach folgt der naechste turnusmaessige Versuch.
+- **Position schliessen bei offener Bracket-Order:** `close_position()` storniert
+  zuerst alle offenen Orders des Symbols (insbesondere die Stop-Loss-/Take-Profit-
+  Kindauftraege einer Bracket-Order) und wartet/pollt, bis Alpaca die Stornierung
+  bestaetigt, bevor die Position tatsaechlich geschlossen wird — sonst schlaegt
+  der Close mit "insufficient qty available for order" fehl, weil die Aktien
+  noch durch die offenen Kindauftraege reserviert sind. Schlaegt der Close trotz
+  bestaetigter Stornierung wegen eines kurzen Timings-Races bei Alpaca noch
+  einmal fehl, wird automatisch mit kurzem Backoff erneut versucht.
 
 ## Naechste Schritte / Anpassungen
 

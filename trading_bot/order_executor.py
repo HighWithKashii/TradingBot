@@ -1,22 +1,31 @@
 """Everything that talks to Alpaca's trading (order/account) endpoint.
 
 Entries are placed as bracket orders so the stop-loss and take-profit legs
-are attached atomically at order submission time. Exits use Alpaca's
-close_position, which also cancels the now-orphaned bracket legs.
+are attached atomically at order submission time. Exits go through
+close_position(), which first cancels any still-open orders for the symbol
+(in particular the bracket's stop-loss/take-profit legs) -- closing a
+position while its bracket legs are still open fails on Alpaca with
+"insufficient qty available for order", because those legs hold the shares
+reserved. Cancellation is confirmed via a short poll/retry loop since it
+completes asynchronously on Alpaca's side.
 """
 
 from __future__ import annotations
 
+import logging
+import time
 from dataclasses import dataclass
 
 from alpaca.common.exceptions import APIError
 from alpaca.trading.client import TradingClient
-from alpaca.trading.enums import OrderClass, OrderSide, TimeInForce
+from alpaca.trading.enums import OrderClass, OrderSide, QueryOrderStatus, TimeInForce
 from alpaca.trading.models import Order, Position, TradeAccount
-from alpaca.trading.requests import MarketOrderRequest, StopLossRequest, TakeProfitRequest
+from alpaca.trading.requests import GetOrdersRequest, MarketOrderRequest, StopLossRequest, TakeProfitRequest
 
 from trading_bot.config import Config
 from trading_bot.risk_manager import BracketPrices
+
+logger = logging.getLogger("trading_bot")
 
 
 class OrderExecutionError(Exception):
@@ -24,8 +33,23 @@ class OrderExecutionError(Exception):
 
 
 class OrderExecutor:
-    def __init__(self, config: Config):
+    def __init__(
+        self,
+        config: Config,
+        cancel_poll_attempts: int = 5,
+        cancel_poll_interval_seconds: float = 1.0,
+        close_retry_attempts: int = 3,
+        close_retry_backoff_seconds: float = 2.0,
+    ):
         self._client = TradingClient(config.api_key, config.secret_key, paper=config.paper)
+        # How long to wait for order-cancellation (esp. bracket SL/TP legs) to
+        # actually clear before giving up and attempting close_position anyway.
+        self._cancel_poll_attempts = cancel_poll_attempts
+        self._cancel_poll_interval_seconds = cancel_poll_interval_seconds
+        # close_position can still race the cancellation on Alpaca's side --
+        # retry a couple of times with backoff before surfacing the error.
+        self._close_retry_attempts = close_retry_attempts
+        self._close_retry_backoff_seconds = close_retry_backoff_seconds
 
     def get_account(self) -> TradeAccount:
         try:
@@ -67,8 +91,67 @@ class OrderExecutor:
         except APIError as exc:
             raise OrderExecutionError(f"Failed to submit bracket buy order for {symbol}: {exc}") from exc
 
-    def close_position(self, symbol: str) -> Order:
+    def _get_open_orders(self, symbol: str) -> list[Order]:
+        request = GetOrdersRequest(status=QueryOrderStatus.OPEN, symbols=[symbol])
         try:
-            return self._client.close_position(symbol)
+            return self._client.get_orders(request)
         except APIError as exc:
-            raise OrderExecutionError(f"Failed to close position for {symbol}: {exc}") from exc
+            raise OrderExecutionError(f"Failed to fetch open orders for {symbol}: {exc}") from exc
+
+    def _cancel_open_orders(self, symbol: str) -> None:
+        """Cancels every open order for a symbol -- in particular the
+        stop-loss/take-profit legs left over from a bracket buy -- and polls
+        until Alpaca confirms none are left (or the retry budget runs out).
+        """
+        open_orders = self._get_open_orders(symbol)
+        if not open_orders:
+            return
+
+        for order in open_orders:
+            try:
+                self._client.cancel_order_by_id(order.id)
+            except APIError as exc:
+                # 404/409/422 -> order already filled/canceled between the
+                # fetch above and this call; nothing left to do for it.
+                if getattr(exc, "status_code", None) not in (404, 409, 422):
+                    raise OrderExecutionError(
+                        f"Failed to cancel order {order.id} for {symbol}: {exc}"
+                    ) from exc
+
+        for _ in range(self._cancel_poll_attempts):
+            if not self._get_open_orders(symbol):
+                return
+            time.sleep(self._cancel_poll_interval_seconds)
+
+        remaining = self._get_open_orders(symbol)
+        if remaining:
+            logger.warning(
+                "%d order(s) for %s still open after cancel + %d retries — attempting close anyway",
+                len(remaining),
+                symbol,
+                self._cancel_poll_attempts,
+            )
+
+    def close_position(self, symbol: str) -> Order:
+        self._cancel_open_orders(symbol)
+
+        last_error: APIError | None = None
+        for attempt in range(self._close_retry_attempts):
+            try:
+                return self._client.close_position(symbol)
+            except APIError as exc:
+                last_error = exc
+                is_last_attempt = attempt == self._close_retry_attempts - 1
+                if "insufficient qty" in str(exc).lower() and not is_last_attempt:
+                    logger.warning(
+                        "close_position(%s) hit 'insufficient qty' (bracket legs likely not yet "
+                        "released) — retrying (%d/%d)",
+                        symbol,
+                        attempt + 1,
+                        self._close_retry_attempts,
+                    )
+                    time.sleep(self._close_retry_backoff_seconds * (attempt + 1))
+                    continue
+                raise OrderExecutionError(f"Failed to close position for {symbol}: {exc}") from exc
+
+        raise OrderExecutionError(f"Failed to close position for {symbol}: {last_error}")

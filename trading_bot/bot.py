@@ -56,13 +56,27 @@ class TradingBot:
         self._trade_logger = trade_logger
 
     def run_forever(self) -> None:
-        source = "Nasdaq-100" if self._config.use_nasdaq100 else "fixed list"
+        config = self._config
+        source = "Nasdaq-100" if config.use_nasdaq100 else "fixed list"
         logger.info(
             "Starting bot (%s trading) — watchlist: %d symbols (%s), interval=%s min",
-            "paper" if self._config.paper else "LIVE",
-            len(self._config.watchlist),
+            "paper" if config.paper else "LIVE",
+            len(config.watchlist),
             source,
-            self._config.check_interval_minutes,
+            config.check_interval_minutes,
+        )
+        logger.info(
+            "Trading mode: %s | timeframe=%s SMA=%d/%d RSI=%d | "
+            "position_size=%.1f%% stop_loss=%.1f%% take_profit=%.1f%% max_daily_loss=%.1f%%",
+            config.trading_mode.upper(),
+            config.timeframe,
+            config.sma_fast,
+            config.sma_slow,
+            config.rsi_period,
+            config.position_size_pct,
+            config.stop_loss_pct,
+            config.take_profit_pct,
+            config.max_daily_loss_pct,
         )
         while True:
             try:

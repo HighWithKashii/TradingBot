@@ -36,6 +36,36 @@ def _get_list(name: str, default: list[str]) -> list[str]:
     return [symbol.strip().upper() for symbol in value.split(",") if symbol.strip()]
 
 
+def _current_trading_mode() -> str:
+    return os.getenv("TRADING_MODE", "standard").strip().lower()
+
+
+# Per-mode defaults for the parameters TRADING_MODE is allowed to steer.
+# Only applied when the corresponding .env variable is left unset --
+# an explicit value in .env always wins over the mode default.
+_MODE_DEFAULTS: dict[str, dict[str, object]] = {
+    "timeframe": {"standard": "15Min", "fast": "5Min"},
+    "check_interval_minutes": {"standard": 15.0, "fast": 5.0},
+    "sma_fast": {"standard": 50, "fast": 9},
+    "sma_slow": {"standard": 200, "fast": 21},
+    "position_size_pct": {"standard": 2.0, "fast": 1.0},
+    "stop_loss_pct": {"standard": 2.0, "fast": 1.0},
+    "take_profit_pct": {"standard": 4.0, "fast": 2.0},
+}
+
+
+def _mode_default(env_name: str, config_key: str, caster):
+    raw = os.getenv(env_name)
+    if raw:
+        return caster(raw)
+    # Falls back to "standard" defaults for an unrecognized TRADING_MODE
+    # instead of raising here -- validate() reports the bad value clearly.
+    mode = _current_trading_mode()
+    if mode not in _MODE_DEFAULTS[config_key]:
+        mode = "standard"
+    return _MODE_DEFAULTS[config_key][mode]
+
+
 @dataclass(frozen=True)
 class Config:
     # Alpaca credentials / endpoint
@@ -46,17 +76,25 @@ class Config:
     # Watchlist / timing
     watchlist_env: list[str] = field(default_factory=lambda: _get_list("WATCHLIST", ["AAPL"]))
     use_nasdaq100: bool = field(default_factory=lambda: _get_bool("USE_NASDAQ100", False))
-    timeframe: str = field(default_factory=lambda: os.getenv("TIMEFRAME", "15Min"))
-    check_interval_minutes: float = field(default_factory=lambda: _get_float("CHECK_INTERVAL_MINUTES", 15))
+
+    # "standard" (swing trading defaults) or "fast" (short-term defaults) --
+    # see _MODE_DEFAULTS above for exactly which parameters this steers.
+    trading_mode: str = field(default_factory=_current_trading_mode)
+
+    timeframe: str = field(default_factory=lambda: _mode_default("TIMEFRAME", "timeframe", str))
+    check_interval_minutes: float = field(
+        default_factory=lambda: _mode_default("CHECK_INTERVAL_MINUTES", "check_interval_minutes", float)
+    )
 
     # Batching for the Nasdaq-100-sized watchlist (keeps requests/minute well
     # under Alpaca's rate limits instead of firing ~100 calls back to back)
     data_batch_size: int = field(default_factory=lambda: _get_int("DATA_BATCH_SIZE", 30))
     data_batch_pause_seconds: float = field(default_factory=lambda: _get_float("DATA_BATCH_PAUSE_SECONDS", 1.0))
 
-    # Strategy parameters
-    sma_fast: int = field(default_factory=lambda: _get_int("SMA_FAST", 50))
-    sma_slow: int = field(default_factory=lambda: _get_int("SMA_SLOW", 200))
+    # Strategy parameters (SMA periods are mode-aware; RSI/MACD are not --
+    # they keep the same defaults in both modes unless overridden in .env)
+    sma_fast: int = field(default_factory=lambda: _mode_default("SMA_FAST", "sma_fast", int))
+    sma_slow: int = field(default_factory=lambda: _mode_default("SMA_SLOW", "sma_slow", int))
     rsi_period: int = field(default_factory=lambda: _get_int("RSI_PERIOD", 14))
     rsi_overbought: float = field(default_factory=lambda: _get_float("RSI_OVERBOUGHT", 70))
     rsi_oversold: float = field(default_factory=lambda: _get_float("RSI_OVERSOLD", 30))
@@ -64,10 +102,16 @@ class Config:
     macd_slow: int = field(default_factory=lambda: _get_int("MACD_SLOW", 26))
     macd_signal: int = field(default_factory=lambda: _get_int("MACD_SIGNAL", 9))
 
-    # Risk management
-    position_size_pct: float = field(default_factory=lambda: _get_float("POSITION_SIZE_PCT", 2.0))
-    stop_loss_pct: float = field(default_factory=lambda: _get_float("STOP_LOSS_PCT", 2.0))
-    take_profit_pct: float = field(default_factory=lambda: _get_float("TAKE_PROFIT_PCT", 4.0))
+    # Risk management (position size / SL / TP are mode-aware; the daily loss
+    # limit is a hard cap that is deliberately identical in both modes --
+    # TRADING_MODE=fast must never loosen it)
+    position_size_pct: float = field(
+        default_factory=lambda: _mode_default("POSITION_SIZE_PCT", "position_size_pct", float)
+    )
+    stop_loss_pct: float = field(default_factory=lambda: _mode_default("STOP_LOSS_PCT", "stop_loss_pct", float))
+    take_profit_pct: float = field(
+        default_factory=lambda: _mode_default("TAKE_PROFIT_PCT", "take_profit_pct", float)
+    )
     max_daily_loss_pct: float = field(default_factory=lambda: _get_float("MAX_DAILY_LOSS_PCT", 3.0))
 
     # Logging
@@ -90,6 +134,8 @@ class Config:
             raise ValueError(
                 "ALPACA_API_KEY / ALPACA_SECRET_KEY are missing. Copy .env.example to .env and fill them in."
             )
+        if self.trading_mode not in ("standard", "fast"):
+            raise ValueError(f"TRADING_MODE must be 'standard' or 'fast', got '{self.trading_mode}'.")
         if not self.watchlist:
             raise ValueError("WATCHLIST must contain at least one symbol (or set USE_NASDAQ100=true).")
         if self.data_batch_size < 1:

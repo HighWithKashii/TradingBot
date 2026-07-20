@@ -62,6 +62,43 @@ geoeffnet ist. Mit `Strg+C` sauber beenden.
 
 Alle Parameter (SMA/RSI/MACD-Perioden, Timeframe, Intervall) sind ueber `.env` anpassbar.
 
+## Trading-Modus: standard oder fast
+
+Ueber `TRADING_MODE` in `.env` laesst sich zwischen zwei vordefinierten
+Parametersaetzen umschalten (Strategie- und Risikologik selbst bleiben
+identisch — es aendern sich nur die Zahlenwerte):
+
+| Parameter | `standard` (Default) | `fast` |
+|---|---|---|
+| `TIMEFRAME` | 15Min | 5Min |
+| `CHECK_INTERVAL_MINUTES` | 15 | 5 |
+| `SMA_FAST` / `SMA_SLOW` | 50 / 200 | 9 / 21 |
+| `RSI_PERIOD`, MACD-Parameter | unveraendert (14 / 12,26,9) | unveraendert |
+| `POSITION_SIZE_PCT` | 2.0 | 1.0 |
+| `STOP_LOSS_PCT` / `TAKE_PROFIT_PCT` | 2.0 / 4.0 | 1.0 / 2.0 |
+| `MAX_DAILY_LOSS_PCT` | 3.0 (hartes Limit) | 3.0 (hartes Limit, **nicht** gelockert) |
+
+Jeder einzelne Wert kann trotzdem explizit in `.env` gesetzt werden — ein
+gesetzter Wert gewinnt immer gegen den Modus-Default (siehe `.env.example`).
+
+**Wichtig:** `fast` bedeutet mehr, aber kleinere und kuerzere Trades — nicht
+automatisch mehr Gewinn. Kuerzere Zeitrahmen (5Min statt 15Min) und ein
+engerer SMA-Crossover (9/21 statt 50/200) reagieren auf mehr Marktrauschen,
+erzeugen also mehr Fehlsignale und mehr Ein-/Ausstiege. Engere Stop-Loss-
+Abstaende (1.0% statt 2.0%) werden entsprechend haeufiger ausgeloest, und
+jeder Trade zahlt (anteilig haeufiger) Spread/Slippage. Die kleinere
+Positionsgroesse (1.0% statt 2.0%) kompensiert das kumulierte Risiko durch
+mehr gleichzeitige/aufeinanderfolgende Trades, aendert aber nichts an der
+grundsaetzlich hoeheren Handelsfrequenz und damit hoeherem operativem Risiko.
+Das Tagesverlust-Limit (`MAX_DAILY_LOSS_PCT`) gilt unveraendert in beiden
+Modi und wird durch `fast` nicht gelockert.
+
+Beim Start loggt der Bot den aktiven Modus und die Kernparameter, z. B.:
+
+```
+Trading mode: FAST | timeframe=5Min SMA=9/21 RSI=14 | position_size=1.0% stop_loss=1.0% take_profit=2.0% max_daily_loss=3.0%
+```
+
 ## Watchlist: feste Liste oder Nasdaq-100
 
 Standardmaessig nutzt der Bot die feste `WATCHLIST` aus `.env`. Mit

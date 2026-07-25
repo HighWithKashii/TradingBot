@@ -1,0 +1,698 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 46;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		004716A080EB9A595654FDE5 /* HomeViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = CEEEAD2B7942C5D1228F638F /* HomeViewModel.swift */; };
+		047D6463124DE030C20275BB /* TrendLineChart.swift in Sources */ = {isa = PBXBuildFile; fileRef = AE98363AEC0AA6623FA17A0B /* TrendLineChart.swift */; };
+		09804305928227D7E00E7D7D /* AnimatedNumberText.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4E2117AE40DD80385F590767 /* AnimatedNumberText.swift */; };
+		0A371EBB024169D704657B75 /* StressTimelineChart.swift in Sources */ = {isa = PBXBuildFile; fileRef = C76916B3AEDD1EE73EC35C03 /* StressTimelineChart.swift */; };
+		0A582DF092D90EBF5574E750 /* TrendsViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = D6EB4C5A09788DC108A8A9D8 /* TrendsViewModel.swift */; };
+		0CE647D2D48F0C9B46EA4790 /* StressSample.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3AE654EAD7AE85E83B1B46C9 /* StressSample.swift */; };
+		0E70466C307CC3D453E864E2 /* MockHealthDataProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = C76180C8C9DCCDBC0FA1C698 /* MockHealthDataProvider.swift */; };
+		0FA9FE241F30588E7BBA77F7 /* RecoveryCalculator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 83EC52C4B4712931E445446F /* RecoveryCalculator.swift */; };
+		147F1DE7B33034A6B8FB2E23 /* View+Haptics.swift in Sources */ = {isa = PBXBuildFile; fileRef = CBDE20F51BFD48840C0D0D26 /* View+Haptics.swift */; };
+		24A60F4ACB9E59D7C3C41792 /* HealthKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 88CDC71105980F05A582A60B /* HealthKit.framework */; };
+		2C62C61C7200060C3D717D7B /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 5DDA855F4668B1E1C9E6DBC1 /* Assets.xcassets */; };
+		32992ABC432784231B4ECDE3 /* HomeDashboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C1A9A5924D99368FA91F363 /* HomeDashboardView.swift */; };
+		33B133DBFBE677512A45976D /* JournalView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 66E612B53495C8E1BD54F4C0 /* JournalView.swift */; };
+		40FA2B5D24CFE4F4C2F4DF34 /* SleepViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 827ED38A8796C73438478B54 /* SleepViewModel.swift */; };
+		41C5AFAA2DA23CE55812E690 /* SettingsViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = BFD2F755BF39E6FE82C8A064 /* SettingsViewModel.swift */; };
+		4823BA4457AAEC2370F46DF7 /* HealthDataProviding.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D10BE3E0E28ACED12F4EF97 /* HealthDataProviding.swift */; };
+		48A71EC3B1D5D1C1F3A05CA5 /* NotificationManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = EFF6849AEC6C0C44743C5914 /* NotificationManager.swift */; };
+		524DAF9A862DB7BEC64A3F69 /* SleepStagesChart.swift in Sources */ = {isa = PBXBuildFile; fileRef = 693CBF8A1D7A66CD2F7FF3CF /* SleepStagesChart.swift */; };
+		56AEAA37901B0E4AFEE722B0 /* Color+Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F3BF3E889EC1F8D12EE791A /* Color+Theme.swift */; };
+		57EC7FCD90A12309BE8FE63B /* Date+Helpers.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF205D8C4F706C11815BC12E /* Date+Helpers.swift */; };
+		60E14392A56498D267C2E7F0 /* RootTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 906A14F6AB6CC21CFD90AE0F /* RootTabView.swift */; };
+		64DBB7F5442A30BE4262313F /* HealthKitManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0FB052EC99C99F36342FE7A7 /* HealthKitManager.swift */; };
+		654217800FE9A11323A700DD /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B266786180570F8BE885B9E /* SettingsView.swift */; };
+		6606ECC75734EE227FE772DE /* SleepDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9942185D813094699E6EADEA /* SleepDetailView.swift */; };
+		6AE7F607B596679ACE8933E6 /* CardContainer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 133DEAB2E25669234B7B23EA /* CardContainer.swift */; };
+		6F9E3ECD6F111B64131A2056 /* MockData.swift in Sources */ = {isa = PBXBuildFile; fileRef = 169CAB3793D59C830A65C1CF /* MockData.swift */; };
+		70C3EFC4FBC876A0767419B1 /* RecoveryDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 127D0F445108BCCDE8E83487 /* RecoveryDetailView.swift */; };
+		744D79F1959223AB84EE9658 /* SleepSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8D10BEE1C1EC7A31119FDA8 /* SleepSession.swift */; };
+		7A14549CC6707297C60289A2 /* SleepAnalyzer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 689B84CB4A27B004EC88CB85 /* SleepAnalyzer.swift */; };
+		86DB884BB7735EEF31CCC4D1 /* GlowRingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F4FB792833DD6D986BB3AC2A /* GlowRingView.swift */; };
+		8BDA9EEB3A49620340666FAF /* AppEnvironment.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2633CBE75E03780481B2E575 /* AppEnvironment.swift */; };
+		92183ABAEA3C21D7EAC55F82 /* RecoveryScore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 52D678275DF7784527C2ADBE /* RecoveryScore.swift */; };
+		9AC99D83F65A4711C347FAD9 /* HapticManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 501D7F55E35762A4FC43276F /* HapticManager.swift */; };
+		9DA3B4C64CAE45C69D9CDD5E /* RecoveryViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE412AEFEE30A7225176D599 /* RecoveryViewModel.swift */; };
+		A6CCDB50F7C54EE4383CB7CB /* StressMonitorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 24ECFC68C0FDE966AAFAE0C6 /* StressMonitorView.swift */; };
+		B3CE99FA884F6CFBFCC3F037 /* StressViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9D4B1230D6470D8B27F1E43E /* StressViewModel.swift */; };
+		B63D24DA5A47F25EE3DAF80B /* StrainView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2735A1228E33C4D898381DBA /* StrainView.swift */; };
+		B734E5C8A75424F60A57AC6E /* TrendsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1AAF0E8F0EF64FBCC1C5EF27 /* TrendsView.swift */; };
+		C4C40CF3E1CB595EEB8DF494 /* StrainScore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9D10F3ACF2957169D08EDDFE /* StrainScore.swift */; };
+		CC39A6FC2E3DA4EB674CBCBA /* StressCalculator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B7AE9ECCC1F749CF15B11E4 /* StressCalculator.swift */; };
+		CC3ADFB9284A62474BC1BDED /* Double+Formatting.swift in Sources */ = {isa = PBXBuildFile; fileRef = E821F6395C7ADA9E2103DABB /* Double+Formatting.swift */; };
+		D64746363F34E7BF1DCB490E /* CorrelationEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = D36C029CB85B3C811B6B8769 /* CorrelationEngine.swift */; };
+		DA83AA2BCB0AB1A49D918764 /* StrainCalculator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44982AD5E3CA17CD4FD9E051 /* StrainCalculator.swift */; };
+		E0EBA4AA6F5BD2B0013E1CC0 /* DailyMetrics.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0BEEA14ED99C396DF391A12E /* DailyMetrics.swift */; };
+		E1BB7A1E55F7B0952578B00D /* JournalViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = D935BFC2B5590D2703FB661E /* JournalViewModel.swift */; };
+		EC24957EEBC27CAF7BC4683B /* HeartRateZoneChart.swift in Sources */ = {isa = PBXBuildFile; fileRef = 953794760BE1C136ED3BFC6A /* HeartRateZoneChart.swift */; };
+		EE6CC98692E6AC6AF1563AAE /* JournalEntry.swift in Sources */ = {isa = PBXBuildFile; fileRef = FEF057A860D860FB62260383 /* JournalEntry.swift */; };
+		EFDCDBFC6101356BE54C943D /* StrainViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B67D4C73BCADDA3C328E64A4 /* StrainViewModel.swift */; };
+		F12C6937E31E5863F45584D9 /* HeartRateSample.swift in Sources */ = {isa = PBXBuildFile; fileRef = B3B67DF5461574D965D26D13 /* HeartRateSample.swift */; };
+		F462E37CC205B6A24BAF6E1C /* BeanFocusApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1801F9AFCDB29F521F7AD785 /* BeanFocusApp.swift */; };
+		F6943C5F39CAE93B8C4BB794 /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = BCBAECFFE4CA6F87B4DF4995 /* Foundation.framework */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		0B266786180570F8BE885B9E /* SettingsView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		0BEEA14ED99C396DF391A12E /* DailyMetrics.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = DailyMetrics.swift; sourceTree = "<group>"; };
+		0D10BE3E0E28ACED12F4EF97 /* HealthDataProviding.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = HealthDataProviding.swift; sourceTree = "<group>"; };
+		0FB052EC99C99F36342FE7A7 /* HealthKitManager.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = HealthKitManager.swift; sourceTree = "<group>"; };
+		127D0F445108BCCDE8E83487 /* RecoveryDetailView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = RecoveryDetailView.swift; sourceTree = "<group>"; };
+		133DEAB2E25669234B7B23EA /* CardContainer.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = CardContainer.swift; sourceTree = "<group>"; };
+		169CAB3793D59C830A65C1CF /* MockData.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MockData.swift; sourceTree = "<group>"; };
+		1801F9AFCDB29F521F7AD785 /* BeanFocusApp.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = BeanFocusApp.swift; sourceTree = "<group>"; };
+		1AAF0E8F0EF64FBCC1C5EF27 /* TrendsView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TrendsView.swift; sourceTree = "<group>"; };
+		1B7AE9ECCC1F749CF15B11E4 /* StressCalculator.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = StressCalculator.swift; sourceTree = "<group>"; };
+		24ECFC68C0FDE966AAFAE0C6 /* StressMonitorView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = StressMonitorView.swift; sourceTree = "<group>"; };
+		2633CBE75E03780481B2E575 /* AppEnvironment.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AppEnvironment.swift; sourceTree = "<group>"; };
+		2735A1228E33C4D898381DBA /* StrainView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = StrainView.swift; sourceTree = "<group>"; };
+		2C1A9A5924D99368FA91F363 /* HomeDashboardView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = HomeDashboardView.swift; sourceTree = "<group>"; };
+		3AE654EAD7AE85E83B1B46C9 /* StressSample.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = StressSample.swift; sourceTree = "<group>"; };
+		3F3BF3E889EC1F8D12EE791A /* Color+Theme.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = "Color+Theme.swift"; sourceTree = "<group>"; };
+		44982AD5E3CA17CD4FD9E051 /* StrainCalculator.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = StrainCalculator.swift; sourceTree = "<group>"; };
+		45C5013AEA7AD5E226DB47DA /* BeanFocus.entitlements */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.entitlements; path = BeanFocus.entitlements; sourceTree = "<group>"; };
+		4E2117AE40DD80385F590767 /* AnimatedNumberText.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AnimatedNumberText.swift; sourceTree = "<group>"; };
+		501D7F55E35762A4FC43276F /* HapticManager.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = HapticManager.swift; sourceTree = "<group>"; };
+		52D678275DF7784527C2ADBE /* RecoveryScore.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = RecoveryScore.swift; sourceTree = "<group>"; };
+		5DDA855F4668B1E1C9E6DBC1 /* Assets.xcassets */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		66E612B53495C8E1BD54F4C0 /* JournalView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = JournalView.swift; sourceTree = "<group>"; };
+		689B84CB4A27B004EC88CB85 /* SleepAnalyzer.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SleepAnalyzer.swift; sourceTree = "<group>"; };
+		693CBF8A1D7A66CD2F7FF3CF /* SleepStagesChart.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SleepStagesChart.swift; sourceTree = "<group>"; };
+		827ED38A8796C73438478B54 /* SleepViewModel.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SleepViewModel.swift; sourceTree = "<group>"; };
+		83EC52C4B4712931E445446F /* RecoveryCalculator.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = RecoveryCalculator.swift; sourceTree = "<group>"; };
+		88CDC71105980F05A582A60B /* HealthKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = HealthKit.framework; path = System/Library/Frameworks/HealthKit.framework; sourceTree = SDKROOT; };
+		906A14F6AB6CC21CFD90AE0F /* RootTabView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = RootTabView.swift; sourceTree = "<group>"; };
+		953794760BE1C136ED3BFC6A /* HeartRateZoneChart.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = HeartRateZoneChart.swift; sourceTree = "<group>"; };
+		9942185D813094699E6EADEA /* SleepDetailView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SleepDetailView.swift; sourceTree = "<group>"; };
+		9D10F3ACF2957169D08EDDFE /* StrainScore.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = StrainScore.swift; sourceTree = "<group>"; };
+		9D4B1230D6470D8B27F1E43E /* StressViewModel.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = StressViewModel.swift; sourceTree = "<group>"; };
+		AE98363AEC0AA6623FA17A0B /* TrendLineChart.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TrendLineChart.swift; sourceTree = "<group>"; };
+		B3B67DF5461574D965D26D13 /* HeartRateSample.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = HeartRateSample.swift; sourceTree = "<group>"; };
+		B67D4C73BCADDA3C328E64A4 /* StrainViewModel.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = StrainViewModel.swift; sourceTree = "<group>"; };
+		BC62409F2EF174A6011D39D4 /* BeanFocus.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = BeanFocus.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		BCBAECFFE4CA6F87B4DF4995 /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS26.0.sdk/System/Library/Frameworks/Foundation.framework; sourceTree = DEVELOPER_DIR; };
+		BFD2F755BF39E6FE82C8A064 /* SettingsViewModel.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SettingsViewModel.swift; sourceTree = "<group>"; };
+		C76180C8C9DCCDBC0FA1C698 /* MockHealthDataProvider.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MockHealthDataProvider.swift; sourceTree = "<group>"; };
+		C76916B3AEDD1EE73EC35C03 /* StressTimelineChart.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = StressTimelineChart.swift; sourceTree = "<group>"; };
+		CBDE20F51BFD48840C0D0D26 /* View+Haptics.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = "View+Haptics.swift"; sourceTree = "<group>"; };
+		CEEEAD2B7942C5D1228F638F /* HomeViewModel.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = HomeViewModel.swift; sourceTree = "<group>"; };
+		D36C029CB85B3C811B6B8769 /* CorrelationEngine.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = CorrelationEngine.swift; sourceTree = "<group>"; };
+		D6EB4C5A09788DC108A8A9D8 /* TrendsViewModel.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TrendsViewModel.swift; sourceTree = "<group>"; };
+		D935BFC2B5590D2703FB661E /* JournalViewModel.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = JournalViewModel.swift; sourceTree = "<group>"; };
+		E821F6395C7ADA9E2103DABB /* Double+Formatting.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = "Double+Formatting.swift"; sourceTree = "<group>"; };
+		EFF6849AEC6C0C44743C5914 /* NotificationManager.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = NotificationManager.swift; sourceTree = "<group>"; };
+		F4FB792833DD6D986BB3AC2A /* GlowRingView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = GlowRingView.swift; sourceTree = "<group>"; };
+		F8D10BEE1C1EC7A31119FDA8 /* SleepSession.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SleepSession.swift; sourceTree = "<group>"; };
+		FE412AEFEE30A7225176D599 /* RecoveryViewModel.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = RecoveryViewModel.swift; sourceTree = "<group>"; };
+		FEF057A860D860FB62260383 /* JournalEntry.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = JournalEntry.swift; sourceTree = "<group>"; };
+		FF205D8C4F706C11815BC12E /* Date+Helpers.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = "Date+Helpers.swift"; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		4E920A1E7C9160576EF3AE2F /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				F6943C5F39CAE93B8C4BB794 /* Foundation.framework in Frameworks */,
+				24A60F4ACB9E59D7C3C41792 /* HealthKit.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		051AFC932DD79EFE3CD3F62C = {
+			isa = PBXGroup;
+			children = (
+				11C5466C2638B157A745820E /* Products */,
+				F6C6686AC66EF4A18EA1443C /* Frameworks */,
+				ED198095FBAB2EA6DB80F2AD /* BeanFocus */,
+			);
+			sourceTree = "<group>";
+		};
+		0EDBAC58D9F8462074E78843 /* Strain */ = {
+			isa = PBXGroup;
+			children = (
+				2735A1228E33C4D898381DBA /* StrainView.swift */,
+			);
+			name = Strain;
+			path = Strain;
+			sourceTree = "<group>";
+		};
+		103B052F408423B3762D76A3 /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				5DDA855F4668B1E1C9E6DBC1 /* Assets.xcassets */,
+				45C5013AEA7AD5E226DB47DA /* BeanFocus.entitlements */,
+			);
+			name = Resources;
+			path = Resources;
+			sourceTree = "<group>";
+		};
+		11C5466C2638B157A745820E /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				BC62409F2EF174A6011D39D4 /* BeanFocus.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		14B57CABE2742E718C82B289 /* iOS */ = {
+			isa = PBXGroup;
+			children = (
+				BCBAECFFE4CA6F87B4DF4995 /* Foundation.framework */,
+			);
+			name = iOS;
+			sourceTree = "<group>";
+		};
+		17403A0C82C97C55C0B7497E /* Journal */ = {
+			isa = PBXGroup;
+			children = (
+				66E612B53495C8E1BD54F4C0 /* JournalView.swift */,
+			);
+			name = Journal;
+			path = Journal;
+			sourceTree = "<group>";
+		};
+		1F6C5008A35AFB9C57D2C9D1 /* Views */ = {
+			isa = PBXGroup;
+			children = (
+				7FC4EB5AD0B27865A360997F /* Components */,
+				E621BBB8D9B4245506045201 /* Home */,
+				17403A0C82C97C55C0B7497E /* Journal */,
+				4F96849737D19E5938A1BED0 /* Recovery */,
+				906A14F6AB6CC21CFD90AE0F /* RootTabView.swift */,
+				A1A4865BB484857C3E29F8C1 /* Settings */,
+				E64D8ED67491F1706BBAFE1B /* Sleep */,
+				0EDBAC58D9F8462074E78843 /* Strain */,
+				A2DB6D1169A847F6AB81167A /* Stress */,
+				9D7C1953FE065272A2449863 /* Trends */,
+			);
+			name = Views;
+			path = Views;
+			sourceTree = "<group>";
+		};
+		21F718537C15BADF1199ACDB /* ViewModels */ = {
+			isa = PBXGroup;
+			children = (
+				CEEEAD2B7942C5D1228F638F /* HomeViewModel.swift */,
+				D935BFC2B5590D2703FB661E /* JournalViewModel.swift */,
+				FE412AEFEE30A7225176D599 /* RecoveryViewModel.swift */,
+				BFD2F755BF39E6FE82C8A064 /* SettingsViewModel.swift */,
+				827ED38A8796C73438478B54 /* SleepViewModel.swift */,
+				B67D4C73BCADDA3C328E64A4 /* StrainViewModel.swift */,
+				9D4B1230D6470D8B27F1E43E /* StressViewModel.swift */,
+				D6EB4C5A09788DC108A8A9D8 /* TrendsViewModel.swift */,
+			);
+			name = ViewModels;
+			path = ViewModels;
+			sourceTree = "<group>";
+		};
+		4F96849737D19E5938A1BED0 /* Recovery */ = {
+			isa = PBXGroup;
+			children = (
+				127D0F445108BCCDE8E83487 /* RecoveryDetailView.swift */,
+			);
+			name = Recovery;
+			path = Recovery;
+			sourceTree = "<group>";
+		};
+		773AE0BD4ADF9972FE2AAF33 /* Extensions */ = {
+			isa = PBXGroup;
+			children = (
+				3F3BF3E889EC1F8D12EE791A /* Color+Theme.swift */,
+				FF205D8C4F706C11815BC12E /* Date+Helpers.swift */,
+				E821F6395C7ADA9E2103DABB /* Double+Formatting.swift */,
+				CBDE20F51BFD48840C0D0D26 /* View+Haptics.swift */,
+			);
+			name = Extensions;
+			path = Extensions;
+			sourceTree = "<group>";
+		};
+		7B67BE26F330E2670702205B /* Models */ = {
+			isa = PBXGroup;
+			children = (
+				0BEEA14ED99C396DF391A12E /* DailyMetrics.swift */,
+				B3B67DF5461574D965D26D13 /* HeartRateSample.swift */,
+				FEF057A860D860FB62260383 /* JournalEntry.swift */,
+				52D678275DF7784527C2ADBE /* RecoveryScore.swift */,
+				F8D10BEE1C1EC7A31119FDA8 /* SleepSession.swift */,
+				9D10F3ACF2957169D08EDDFE /* StrainScore.swift */,
+				3AE654EAD7AE85E83B1B46C9 /* StressSample.swift */,
+			);
+			name = Models;
+			path = Models;
+			sourceTree = "<group>";
+		};
+		7FC4EB5AD0B27865A360997F /* Components */ = {
+			isa = PBXGroup;
+			children = (
+				4E2117AE40DD80385F590767 /* AnimatedNumberText.swift */,
+				133DEAB2E25669234B7B23EA /* CardContainer.swift */,
+				F4FB792833DD6D986BB3AC2A /* GlowRingView.swift */,
+				953794760BE1C136ED3BFC6A /* HeartRateZoneChart.swift */,
+				693CBF8A1D7A66CD2F7FF3CF /* SleepStagesChart.swift */,
+				C76916B3AEDD1EE73EC35C03 /* StressTimelineChart.swift */,
+				AE98363AEC0AA6623FA17A0B /* TrendLineChart.swift */,
+			);
+			name = Components;
+			path = Components;
+			sourceTree = "<group>";
+		};
+		965102C85D3CE9A5AF7C3246 /* PreviewContent */ = {
+			isa = PBXGroup;
+			children = (
+				169CAB3793D59C830A65C1CF /* MockData.swift */,
+			);
+			name = PreviewContent;
+			path = PreviewContent;
+			sourceTree = "<group>";
+		};
+		9D7C1953FE065272A2449863 /* Trends */ = {
+			isa = PBXGroup;
+			children = (
+				1AAF0E8F0EF64FBCC1C5EF27 /* TrendsView.swift */,
+			);
+			name = Trends;
+			path = Trends;
+			sourceTree = "<group>";
+		};
+		A1A4865BB484857C3E29F8C1 /* Settings */ = {
+			isa = PBXGroup;
+			children = (
+				0B266786180570F8BE885B9E /* SettingsView.swift */,
+			);
+			name = Settings;
+			path = Settings;
+			sourceTree = "<group>";
+		};
+		A2DB6D1169A847F6AB81167A /* Stress */ = {
+			isa = PBXGroup;
+			children = (
+				24ECFC68C0FDE966AAFAE0C6 /* StressMonitorView.swift */,
+			);
+			name = Stress;
+			path = Stress;
+			sourceTree = "<group>";
+		};
+		A5989454670B4F89329624F8 /* App */ = {
+			isa = PBXGroup;
+			children = (
+				2633CBE75E03780481B2E575 /* AppEnvironment.swift */,
+				1801F9AFCDB29F521F7AD785 /* BeanFocusApp.swift */,
+			);
+			name = App;
+			path = App;
+			sourceTree = "<group>";
+		};
+		E621BBB8D9B4245506045201 /* Home */ = {
+			isa = PBXGroup;
+			children = (
+				2C1A9A5924D99368FA91F363 /* HomeDashboardView.swift */,
+			);
+			name = Home;
+			path = Home;
+			sourceTree = "<group>";
+		};
+		E64D8ED67491F1706BBAFE1B /* Sleep */ = {
+			isa = PBXGroup;
+			children = (
+				9942185D813094699E6EADEA /* SleepDetailView.swift */,
+			);
+			name = Sleep;
+			path = Sleep;
+			sourceTree = "<group>";
+		};
+		ED198095FBAB2EA6DB80F2AD /* BeanFocus */ = {
+			isa = PBXGroup;
+			children = (
+				A5989454670B4F89329624F8 /* App */,
+				773AE0BD4ADF9972FE2AAF33 /* Extensions */,
+				7B67BE26F330E2670702205B /* Models */,
+				965102C85D3CE9A5AF7C3246 /* PreviewContent */,
+				103B052F408423B3762D76A3 /* Resources */,
+				FDDA304995CEDDFE22DD6F6E /* Services */,
+				21F718537C15BADF1199ACDB /* ViewModels */,
+				1F6C5008A35AFB9C57D2C9D1 /* Views */,
+			);
+			name = BeanFocus;
+			path = BeanFocus;
+			sourceTree = "<group>";
+		};
+		F6C6686AC66EF4A18EA1443C /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				14B57CABE2742E718C82B289 /* iOS */,
+				88CDC71105980F05A582A60B /* HealthKit.framework */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
+		FDDA304995CEDDFE22DD6F6E /* Services */ = {
+			isa = PBXGroup;
+			children = (
+				D36C029CB85B3C811B6B8769 /* CorrelationEngine.swift */,
+				501D7F55E35762A4FC43276F /* HapticManager.swift */,
+				0D10BE3E0E28ACED12F4EF97 /* HealthDataProviding.swift */,
+				0FB052EC99C99F36342FE7A7 /* HealthKitManager.swift */,
+				C76180C8C9DCCDBC0FA1C698 /* MockHealthDataProvider.swift */,
+				EFF6849AEC6C0C44743C5914 /* NotificationManager.swift */,
+				83EC52C4B4712931E445446F /* RecoveryCalculator.swift */,
+				689B84CB4A27B004EC88CB85 /* SleepAnalyzer.swift */,
+				44982AD5E3CA17CD4FD9E051 /* StrainCalculator.swift */,
+				1B7AE9ECCC1F749CF15B11E4 /* StressCalculator.swift */,
+			);
+			name = Services;
+			path = Services;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		37E040B497FDE77BC967E151 /* BeanFocus */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 83C2E445EC6771F58496D0A8 /* Build configuration list for PBXNativeTarget "BeanFocus" */;
+			buildPhases = (
+				1749921D172F373E59946C24 /* Sources */,
+				4E920A1E7C9160576EF3AE2F /* Frameworks */,
+				3F9DE5B92CDBCF57DF96CB68 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = BeanFocus;
+			productName = BeanFocus;
+			productReference = BC62409F2EF174A6011D39D4 /* BeanFocus.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		872609DCA4F8173CDBACB199 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				LastSwiftUpdateCheck = 1600;
+				LastUpgradeCheck = 1600;
+			};
+			buildConfigurationList = 8A6D02BD4FC6F23649A4DD44 /* Build configuration list for PBXProject "BeanFocus" */;
+			compatibilityVersion = "Xcode 3.2";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = 051AFC932DD79EFE3CD3F62C;
+			minimizedProjectReferenceProxies = 0;
+			preferredProjectObjectVersion = 100;
+			productRefGroup = 11C5466C2638B157A745820E /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				37E040B497FDE77BC967E151 /* BeanFocus */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		3F9DE5B92CDBCF57DF96CB68 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				2C62C61C7200060C3D717D7B /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		1749921D172F373E59946C24 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				8BDA9EEB3A49620340666FAF /* AppEnvironment.swift in Sources */,
+				F462E37CC205B6A24BAF6E1C /* BeanFocusApp.swift in Sources */,
+				56AEAA37901B0E4AFEE722B0 /* Color+Theme.swift in Sources */,
+				57EC7FCD90A12309BE8FE63B /* Date+Helpers.swift in Sources */,
+				CC3ADFB9284A62474BC1BDED /* Double+Formatting.swift in Sources */,
+				147F1DE7B33034A6B8FB2E23 /* View+Haptics.swift in Sources */,
+				E0EBA4AA6F5BD2B0013E1CC0 /* DailyMetrics.swift in Sources */,
+				F12C6937E31E5863F45584D9 /* HeartRateSample.swift in Sources */,
+				EE6CC98692E6AC6AF1563AAE /* JournalEntry.swift in Sources */,
+				92183ABAEA3C21D7EAC55F82 /* RecoveryScore.swift in Sources */,
+				744D79F1959223AB84EE9658 /* SleepSession.swift in Sources */,
+				C4C40CF3E1CB595EEB8DF494 /* StrainScore.swift in Sources */,
+				0CE647D2D48F0C9B46EA4790 /* StressSample.swift in Sources */,
+				6F9E3ECD6F111B64131A2056 /* MockData.swift in Sources */,
+				D64746363F34E7BF1DCB490E /* CorrelationEngine.swift in Sources */,
+				9AC99D83F65A4711C347FAD9 /* HapticManager.swift in Sources */,
+				4823BA4457AAEC2370F46DF7 /* HealthDataProviding.swift in Sources */,
+				64DBB7F5442A30BE4262313F /* HealthKitManager.swift in Sources */,
+				0E70466C307CC3D453E864E2 /* MockHealthDataProvider.swift in Sources */,
+				48A71EC3B1D5D1C1F3A05CA5 /* NotificationManager.swift in Sources */,
+				0FA9FE241F30588E7BBA77F7 /* RecoveryCalculator.swift in Sources */,
+				7A14549CC6707297C60289A2 /* SleepAnalyzer.swift in Sources */,
+				DA83AA2BCB0AB1A49D918764 /* StrainCalculator.swift in Sources */,
+				CC39A6FC2E3DA4EB674CBCBA /* StressCalculator.swift in Sources */,
+				004716A080EB9A595654FDE5 /* HomeViewModel.swift in Sources */,
+				E1BB7A1E55F7B0952578B00D /* JournalViewModel.swift in Sources */,
+				9DA3B4C64CAE45C69D9CDD5E /* RecoveryViewModel.swift in Sources */,
+				41C5AFAA2DA23CE55812E690 /* SettingsViewModel.swift in Sources */,
+				40FA2B5D24CFE4F4C2F4DF34 /* SleepViewModel.swift in Sources */,
+				EFDCDBFC6101356BE54C943D /* StrainViewModel.swift in Sources */,
+				B3CE99FA884F6CFBFCC3F037 /* StressViewModel.swift in Sources */,
+				0A582DF092D90EBF5574E750 /* TrendsViewModel.swift in Sources */,
+				09804305928227D7E00E7D7D /* AnimatedNumberText.swift in Sources */,
+				6AE7F607B596679ACE8933E6 /* CardContainer.swift in Sources */,
+				86DB884BB7735EEF31CCC4D1 /* GlowRingView.swift in Sources */,
+				EC24957EEBC27CAF7BC4683B /* HeartRateZoneChart.swift in Sources */,
+				524DAF9A862DB7BEC64A3F69 /* SleepStagesChart.swift in Sources */,
+				0A371EBB024169D704657B75 /* StressTimelineChart.swift in Sources */,
+				047D6463124DE030C20275BB /* TrendLineChart.swift in Sources */,
+				32992ABC432784231B4ECDE3 /* HomeDashboardView.swift in Sources */,
+				33B133DBFBE677512A45976D /* JournalView.swift in Sources */,
+				70C3EFC4FBC876A0767419B1 /* RecoveryDetailView.swift in Sources */,
+				60E14392A56498D267C2E7F0 /* RootTabView.swift in Sources */,
+				654217800FE9A11323A700DD /* SettingsView.swift in Sources */,
+				6606ECC75734EE227FE772DE /* SleepDetailView.swift in Sources */,
+				B63D24DA5A47F25EE3DAF80B /* StrainView.swift in Sources */,
+				A6CCDB50F7C54EE4383CB7CB /* StressMonitorView.swift in Sources */,
+				B734E5C8A75424F60A57AC6E /* TrendsView.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		1B486EC074887FACA9285ED9 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CLANG_ENABLE_OBJC_WEAK = NO;
+				CODE_SIGN_ENTITLEMENTS = BeanFocus/Resources/BeanFocus.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = BeanFocus;
+				INFOPLIST_KEY_NSHealthShareUsageDescription = "BeanFocus liest deine Herzfrequenz, HRV, Schlaf- und Aktivitätsdaten, um Recovery, Strain und Stress zu berechnen.";
+				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "BeanFocus kann Trainingseinheiten in Health speichern, die du in der App aufzeichnest.";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
+				INFOPLIST_KEY_UIUserInterfaceStyle = Dark;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks";
+				PRODUCT_BUNDLE_IDENTIFIER = com.beanfocus.app;
+				PRODUCT_NAME = BeanFocus;
+				SDKROOT = iphoneos;
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		235F3AF946B07013919066AF /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CLANG_ENABLE_OBJC_WEAK = NO;
+				CODE_SIGN_ENTITLEMENTS = BeanFocus/Resources/BeanFocus.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = BeanFocus;
+				INFOPLIST_KEY_NSHealthShareUsageDescription = "BeanFocus liest deine Herzfrequenz, HRV, Schlaf- und Aktivitätsdaten, um Recovery, Strain und Stress zu berechnen.";
+				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "BeanFocus kann Trainingseinheiten in Health speichern, die du in der App aufzeichnest.";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
+				INFOPLIST_KEY_UIUserInterfaceStyle = Dark;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks";
+				PRODUCT_BUNDLE_IDENTIFIER = com.beanfocus.app;
+				PRODUCT_NAME = BeanFocus;
+				SDKROOT = iphoneos;
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		8464E20C88B34885CBFA47A3 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		C97BD4A2DAC684283C96CAE1 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		83C2E445EC6771F58496D0A8 /* Build configuration list for PBXNativeTarget "BeanFocus" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				235F3AF946B07013919066AF /* Release */,
+				1B486EC074887FACA9285ED9 /* Debug */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		8A6D02BD4FC6F23649A4DD44 /* Build configuration list for PBXProject "BeanFocus" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				8464E20C88B34885CBFA47A3 /* Debug */,
+				C97BD4A2DAC684283C96CAE1 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 872609DCA4F8173CDBACB199 /* Project object */;
+}

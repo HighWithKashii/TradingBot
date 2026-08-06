@@ -114,6 +114,25 @@ class Config:
     )
     max_daily_loss_pct: float = field(default_factory=lambda: _get_float("MAX_DAILY_LOSS_PCT", 3.0))
 
+    # Pattern-Modul (Trendlinien-/Chartmuster-Erkennung, siehe patterns.py):
+    # komplett optional, per Default aus -- aendert bei PATTERN_ENABLED=false
+    # nichts am bestehenden Verhalten (siehe strategy.combine_with_pattern_signal).
+    pattern_enabled: bool = field(default_factory=lambda: _get_bool("PATTERN_ENABLED", False))
+    pattern_pivot_window: int = field(default_factory=lambda: _get_int("PATTERN_PIVOT_WINDOW", 4))
+    pattern_min_pivots: int = field(default_factory=lambda: _get_int("PATTERN_MIN_TRENDLINE_PIVOTS", 3))
+    pattern_max_pivots: int = field(default_factory=lambda: _get_int("PATTERN_MAX_TRENDLINE_PIVOTS", 5))
+    pattern_breakout_threshold_pct: float = field(
+        default_factory=lambda: _get_float("PATTERN_BREAKOUT_THRESHOLD_PCT", 0.3)
+    )
+    pattern_min_confidence: float = field(default_factory=lambda: _get_float("PATTERN_MIN_CONFIDENCE", 0.5))
+    # "confirm"  -> Pattern-Signal muss dem bestehenden Signal zustimmen, sonst HOLD
+    # "weighted" -> gewichtete Kombination aus Indikator- und Pattern-Score
+    pattern_combine_mode: str = field(default_factory=lambda: os.getenv("PATTERN_COMBINE_MODE", "confirm").strip().lower())
+    pattern_weight: float = field(default_factory=lambda: _get_float("PATTERN_WEIGHT", 0.4))
+    pattern_sr_zone_tolerance_pct: float = field(
+        default_factory=lambda: _get_float("PATTERN_SR_ZONE_TOLERANCE_PCT", 0.5)
+    )
+
     # Logging
     trade_log_path: str = field(default_factory=lambda: os.getenv("TRADE_LOG_PATH", "trades.csv"))
 
@@ -146,6 +165,20 @@ class Config:
             raise ValueError("POSITION_SIZE_PCT must be between 0 and 100.")
         if not (0 < self.max_daily_loss_pct <= 100):
             raise ValueError("MAX_DAILY_LOSS_PCT must be between 0 and 100.")
+        if self.pattern_combine_mode not in ("confirm", "weighted"):
+            raise ValueError(
+                f"PATTERN_COMBINE_MODE must be 'confirm' or 'weighted', got '{self.pattern_combine_mode}'."
+            )
+        if not (0.0 <= self.pattern_weight <= 1.0):
+            raise ValueError("PATTERN_WEIGHT must be between 0 and 1.")
+        if not (0.0 <= self.pattern_min_confidence <= 1.0):
+            raise ValueError("PATTERN_MIN_CONFIDENCE must be between 0 and 1.")
+        if self.pattern_pivot_window < 1:
+            raise ValueError("PATTERN_PIVOT_WINDOW must be at least 1.")
+        if self.pattern_min_pivots < 2:
+            raise ValueError("PATTERN_MIN_TRENDLINE_PIVOTS must be at least 2 (a line needs 2+ points).")
+        if self.pattern_max_pivots < self.pattern_min_pivots:
+            raise ValueError("PATTERN_MAX_TRENDLINE_PIVOTS must be >= PATTERN_MIN_TRENDLINE_PIVOTS.")
 
 
 def load_config() -> Config:

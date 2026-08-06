@@ -1,0 +1,327 @@
+"""Backtest-Modul: spielt die exakt gleiche Entscheidungslogik wie der
+Live-Bot (strategy.generate_signal + optional das Pattern-Modul aus
+patterns.py) Balken fuer Balken auf historischen Daten durch, BEVOR etwas
+live/paper laeuft. Das ist bewusst keine separate Nachbildung der Strategie
+-- es werden dieselben Funktionen aus strategy.py aufgerufen wie in bot.py,
+damit Backtest- und Live-Verhalten nicht auseinanderlaufen koennen.
+
+Datenquelle: zuerst Alpacas historische Markt-API (wenn API-Keys in der
+Config vorhanden sind), sonst/bei Fehler Fallback auf yfinance (Yahoo
+Finance, keine Alpaca-Keys noetig -- gut zum Ausprobieren ohne Account).
+
+Simulation: long-only, eine Position gleichzeitig pro Symbol, Stop-Loss/
+Take-Profit gemaess denselben Prozentsaetzen wie die Live-Bracket-Order
+(risk_manager.calculate_bracket_prices), Positionsgroesse gemaess
+config.position_size_pct (nicht 100% des Kapitals pro Trade -- sonst waere
+das Ergebnis nicht vergleichbar mit dem tatsaechlichen Risiko im Live-Bot).
+
+Bewusste Vereinfachung: das Tagesverlust-Limit (MAX_DAILY_LOSS_PCT) wird im
+Backtest NICHT simuliert (nur SL/TP + Signal-Exit), siehe README.
+
+Performance-Hinweis: pro Balken wird compute_indicators() auf dem bis dahin
+sichtbaren Fenster neu berechnet (kein inkrementelles Update) -- das ist
+fuer die ueblichen Backtest-Groessen (taegliche Bars ueber 1-3 Jahre) schnell
+genug, skaliert aber nicht auf sehr lange Intraday-Historien.
+
+CLI-Nutzung:  python -m trading_bot.backtest --symbol AAPL --days 730
+"""
+
+from __future__ import annotations
+
+import argparse
+import logging
+from dataclasses import dataclass, field, replace
+
+import pandas as pd
+
+from trading_bot.config import Config, load_config
+from trading_bot.risk_manager import RiskManager
+from trading_bot.strategy import (
+    Action,
+    combine_with_pattern_signal,
+    compute_indicators,
+    generate_pattern_signal_from_config,
+    generate_signal,
+)
+
+logger = logging.getLogger("trading_bot")
+
+
+@dataclass(frozen=True)
+class BacktestTrade:
+    entry_time: object
+    exit_time: object
+    entry_price: float
+    exit_price: float
+    pnl_pct: float
+    exit_reason: str
+
+
+@dataclass
+class BacktestResult:
+    symbol: str
+    trades: list[BacktestTrade] = field(default_factory=list)
+    equity_curve: list[float] = field(default_factory=lambda: [0.0])
+    starting_equity: float = 10_000.0
+
+    @property
+    def num_trades(self) -> int:
+        return len(self.trades)
+
+    @property
+    def win_rate(self) -> float:
+        if not self.trades:
+            return 0.0
+        wins = sum(1 for t in self.trades if t.pnl_pct > 0)
+        return wins / len(self.trades) * 100
+
+    @property
+    def avg_win_pct(self) -> float:
+        wins = [t.pnl_pct for t in self.trades if t.pnl_pct > 0]
+        return sum(wins) / len(wins) if wins else 0.0
+
+    @property
+    def avg_loss_pct(self) -> float:
+        losses = [t.pnl_pct for t in self.trades if t.pnl_pct <= 0]
+        return sum(losses) / len(losses) if losses else 0.0
+
+    @property
+    def avg_pnl_pct(self) -> float:
+        if not self.trades:
+            return 0.0
+        return sum(t.pnl_pct for t in self.trades) / len(self.trades)
+
+    @property
+    def total_return_pct(self) -> float:
+        if self.starting_equity <= 0:
+            return 0.0
+        return (self.equity_curve[-1] / self.starting_equity - 1) * 100
+
+    @property
+    def max_drawdown_pct(self) -> float:
+        peak = self.equity_curve[0]
+        max_dd = 0.0
+        for eq in self.equity_curve:
+            peak = max(peak, eq)
+            if peak > 0:
+                max_dd = max(max_dd, (peak - eq) / peak * 100)
+        return max_dd
+
+    def summary(self, label: str = "") -> str:
+        header = f"=== Backtest {label} ({self.symbol}) ===" if label else f"=== Backtest ({self.symbol}) ==="
+        lines = [header, f"Trades: {self.num_trades}"]
+        if self.num_trades == 0:
+            lines.append("Keine Trades ausgeloest (Signale zu selten/uneindeutig fuer den Testzeitraum).")
+            return "\n".join(lines)
+        lines.append(f"Trefferquote: {self.win_rate:.1f}%")
+        lines.append(f"Avg. Gewinn: {self.avg_win_pct:+.2f}%  |  Avg. Verlust: {self.avg_loss_pct:+.2f}%")
+        lines.append(f"Avg. P&L pro Trade: {self.avg_pnl_pct:+.2f}%")
+        lines.append(
+            f"Gesamtrendite: {self.total_return_pct:+.2f}% "
+            f"(Start {self.starting_equity:.2f} -> Ende {self.equity_curve[-1]:.2f})"
+        )
+        lines.append(f"Max Drawdown: {self.max_drawdown_pct:.2f}%")
+        return "\n".join(lines)
+
+
+def load_historical_data(
+    symbol: str,
+    lookback_days: int = 730,
+    timeframe: str = "1Day",
+    config: Config | None = None,
+) -> pd.DataFrame:
+    """Laedt historische OHLCV-Daten fuer den Backtest: primaer ueber Alpacas
+    historische Markt-API (wenn `config` gueltige API-Keys enthaelt), sonst
+    per yfinance-Fallback. Gibt ein aufsteigend sortiertes DataFrame mit
+    'open','high','low','close','volume' zurueck.
+    """
+    if config is not None and config.api_key and config.secret_key:
+        try:
+            from trading_bot.data_feed import MarketDataFeed
+
+            backtest_config = replace(config, timeframe=timeframe)
+            feed = MarketDataFeed(backtest_config)
+            # grober Umrechnungsfaktor Kalendertage -> Balkenanzahl fuer
+            # nicht-taegliche Timeframes (nur fuer den Anfrage-Limit noetig)
+            limit = lookback_days if timeframe.lower().endswith("day") else lookback_days * 26
+            bars = feed.get_bars(symbol, limit=limit)
+            if not bars.empty:
+                logger.info("Historische Daten fuer %s von Alpaca geladen (%d Balken).", symbol, len(bars))
+                return bars
+            logger.warning("Alpaca lieferte keine Daten fuer %s, versuche yfinance...", symbol)
+        except Exception as exc:
+            logger.warning("Alpaca-Abruf fuer %s fehlgeschlagen (%s), versuche yfinance...", symbol, exc)
+
+    return _load_from_yfinance(symbol, lookback_days)
+
+
+def _load_from_yfinance(symbol: str, lookback_days: int) -> pd.DataFrame:
+    try:
+        import yfinance as yf
+    except ImportError as exc:
+        raise RuntimeError(
+            "Weder gueltige Alpaca-Keys noch das Paket 'yfinance' verfuegbar. "
+            "Installiere yfinance (`pip install yfinance`) fuer den Backtest-Fallback "
+            "oder hinterlege ALPACA_API_KEY/ALPACA_SECRET_KEY in .env."
+        ) from exc
+
+    period = f"{max(lookback_days, 30)}d" if lookback_days <= 730 else "max"
+    raw = yf.download(symbol, period=period, interval="1d", progress=False, auto_adjust=True)
+    if raw is None or raw.empty:
+        raise RuntimeError(f"yfinance lieferte keine Daten fuer {symbol}.")
+
+    raw = raw.rename(columns=str.lower)
+    if isinstance(raw.columns, pd.MultiIndex):
+        raw.columns = [str(c[0]).lower() for c in raw.columns]
+    logger.info("Historische Daten fuer %s von yfinance geladen (%d Balken).", symbol, len(raw))
+    return raw[["open", "high", "low", "close", "volume"]].sort_index()
+
+
+def _combined_signal(window: pd.DataFrame, config: Config, has_open_position: bool):
+    """Ruft dieselben Entscheidungsfunktionen wie bot.py auf -- Backtest und
+    Live-Bot teilen sich diesen Code, damit sich die Logik nicht auseinander
+    entwickeln kann.
+    """
+    enriched = compute_indicators(window, config)
+    signal = generate_signal(enriched, config, has_open_position=has_open_position)
+    if config.pattern_enabled:
+        pattern_signal = generate_pattern_signal_from_config(window, config)
+        signal = combine_with_pattern_signal(signal, pattern_signal, config)
+    return signal
+
+
+def run_backtest(df: pd.DataFrame, config: Config, symbol: str = "", starting_equity: float = 10_000.0) -> BacktestResult:
+    """Simuliert die Strategie Balken fuer Balken auf historischen Daten.
+
+    An jedem Balken i wird nur das Fenster df.iloc[:i+1] verwendet (kein
+    Blick in die Zukunft). Ohne offene Position wird bei BUY zum Schlusskurs
+    des Balkens eingestiegen und sofort SL/TP gemaess risk_manager gesetzt
+    (identisch zur Live-Bracket-Order). Mit offener Position wird bei jedem
+    weiteren Balken zuerst auf Stop-Loss/Take-Profit (High/Low-Durchbruch)
+    geprueft, danach auf ein SELL-Signal der Strategie.
+    """
+    result = BacktestResult(symbol=symbol, starting_equity=starting_equity)
+    risk_manager = RiskManager(config)
+    position_fraction = config.position_size_pct / 100
+
+    equity = starting_equity
+    equity_curve = [equity]
+
+    in_position = False
+    entry_price = 0.0
+    entry_index = 0
+    stop_price = take_price = 0.0
+
+    min_bars = config.min_bars_required
+    if len(df) <= min_bars:
+        logger.warning(
+            "Nur %d Balken verfuegbar, aber min_bars_required=%d -- Backtest liefert keine Trades.",
+            len(df),
+            min_bars,
+        )
+        result.equity_curve = equity_curve
+        return result
+
+    for i in range(min_bars, len(df)):
+        window = df.iloc[: i + 1]
+        bar = df.iloc[i]
+
+        if in_position:
+            exit_price = None
+            exit_reason = ""
+            if bar["low"] <= stop_price:
+                exit_price, exit_reason = stop_price, "Stop-Loss"
+            elif bar["high"] >= take_price:
+                exit_price, exit_reason = take_price, "Take-Profit"
+            else:
+                signal = _combined_signal(window, config, has_open_position=True)
+                if signal.action == Action.SELL:
+                    exit_price, exit_reason = float(bar["close"]), "Signal"
+
+            if exit_price is not None:
+                pnl_pct = (exit_price - entry_price) / entry_price * 100
+                equity += equity * position_fraction * (pnl_pct / 100)
+                equity_curve.append(equity)
+                result.trades.append(
+                    BacktestTrade(
+                        entry_time=df.index[entry_index],
+                        exit_time=df.index[i],
+                        entry_price=entry_price,
+                        exit_price=exit_price,
+                        pnl_pct=pnl_pct,
+                        exit_reason=exit_reason,
+                    )
+                )
+                in_position = False
+
+        else:
+            signal = _combined_signal(window, config, has_open_position=False)
+            if signal.action == Action.BUY:
+                entry_price = float(bar["close"])
+                entry_index = i
+                prices = risk_manager.calculate_bracket_prices(entry_price)
+                stop_price, take_price = prices.stop_loss, prices.take_profit
+                in_position = True
+
+    result.equity_curve = equity_curve
+    return result
+
+
+def _build_cli_config(pattern_enabled: bool) -> Config:
+    """Config fuer die CLI: laedt aus .env, wenn vorhanden, aber verlangt
+    KEINE Alpaca-Keys -- ein Backtest per yfinance soll ohne Account
+    funktionieren. `load_config()` wuerde hier hart fehlschlagen (die
+    validate() dort verlangt Keys, weil Live/Paper-Trading ohne sie
+    sinnlos waere), deshalb wird die Config hier bewusst OHNE diese
+    Pruefung konstruiert.
+    """
+    return replace(Config(), pattern_enabled=pattern_enabled)
+
+
+def main() -> None:
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+
+    parser = argparse.ArgumentParser(
+        description="Backtest der Trading-Strategie, optional mit Pattern-Modul (Trendlinien/Muster)."
+    )
+    parser.add_argument("--symbol", default="AAPL", help="Zu testendes Symbol (Standard: AAPL)")
+    parser.add_argument("--days", type=int, default=730, help="Lookback in Kalendertagen (Standard: 730)")
+    parser.add_argument(
+        "--starting-equity", type=float, default=10_000.0, help="Simuliertes Startkapital (Standard: 10000)"
+    )
+    parser.add_argument(
+        "--no-compare",
+        action="store_true",
+        help="Nur mit der aktuellen .env-Konfiguration testen statt automatisch mit/ohne Pattern-Modul zu vergleichen.",
+    )
+    args = parser.parse_args()
+
+    try:
+        if args.no_compare:
+            try:
+                config = load_config()
+            except ValueError:
+                config = Config()
+            df = load_historical_data(args.symbol, lookback_days=args.days, config=config)
+            result = run_backtest(df, config, symbol=args.symbol, starting_equity=args.starting_equity)
+            print(result.summary("(.env-Konfiguration)"))
+            return
+
+        config_off = _build_cli_config(pattern_enabled=False)
+        config_on = _build_cli_config(pattern_enabled=True)
+
+        df = load_historical_data(args.symbol, lookback_days=args.days, config=config_off)
+    except RuntimeError as exc:
+        logging.error("Backtest abgebrochen: %s", exc)
+        raise SystemExit(1) from None
+
+    result_off = run_backtest(df, config_off, symbol=args.symbol, starting_equity=args.starting_equity)
+    result_on = run_backtest(df, config_on, symbol=args.symbol, starting_equity=args.starting_equity)
+
+    print(result_off.summary("OHNE Pattern-Modul"))
+    print()
+    print(result_on.summary("MIT Pattern-Modul"))
+
+
+if __name__ == "__main__":
+    main()

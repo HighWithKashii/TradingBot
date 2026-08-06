@@ -3,3 +3,8 @@ pandas>=2.0.0
 numpy>=1.24.0
 python-dotenv>=1.0.0
 colorama>=0.4.6
+
+# Optional: nur als Fallback-Datenquelle fuer backtest.py, wenn keine
+# gueltigen Alpaca-Keys hinterlegt sind. Fuer Live/Paper-Trading nicht
+# noetig (wird in backtest.py nur bei Bedarf lazy importiert).
+yfinance>=0.2.40

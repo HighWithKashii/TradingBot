@@ -16,6 +16,7 @@ import pandas as pd
 
 from trading_bot.config import Config
 from trading_bot.indicators import ema, macd, rsi, sma
+from trading_bot.patterns import PatternSignal, generate_pattern_signal
 
 
 class Action(str, Enum):
@@ -126,3 +127,60 @@ def generate_signal(df: pd.DataFrame, config: Config, has_open_position: bool) -
     if not rsi_ok_for_entry:
         missing.append(f"RSI outside entry range ({indicators['rsi']})")
     return SignalResult(Action.HOLD, "No entry: " + ", ".join(missing) + ".", indicators)
+
+
+def generate_pattern_signal_from_config(df: pd.DataFrame, config: Config) -> PatternSignal:
+    """Adapter zwischen der config-losen patterns.py und der bestehenden
+    Config-Struktur: uebersetzt die PATTERN_*-Einstellungen in die einfachen
+    Zahlenparameter, die patterns.generate_pattern_signal() erwartet.
+    `df` sollte die rohen OHLCV-Bars sein (nicht das indikator-angereicherte
+    DataFrame aus compute_indicators -- patterns.py braucht nur OHLCV).
+    """
+    return generate_pattern_signal(
+        df,
+        pivot_window=config.pattern_pivot_window,
+        min_pivots=config.pattern_min_pivots,
+        max_pivots=config.pattern_max_pivots,
+        breakout_threshold_pct=config.pattern_breakout_threshold_pct,
+        sr_zone_tolerance_pct=config.pattern_sr_zone_tolerance_pct,
+    )
+
+
+def combine_with_pattern_signal(base_signal: SignalResult, pattern_signal: PatternSignal, config: Config) -> SignalResult:
+    """Kombiniert das bestehende Indikator-Signal mit dem unabhaengigen
+    Pattern-Signal (Trendlinien/Muster aus patterns.py). Das Pattern-Modul
+    ERSETZT die bestehende Logik nicht und kann von sich aus KEINEN Trade
+    ausloesen: ist das Basis-Signal HOLD, bleibt es HOLD, egal wie stark das
+    Pattern-Signal ist. Es kann nur ein vorhandenes BUY/SELL bestaetigen
+    (und damit durchlassen) oder verwerfen (und damit auf HOLD zuruecksetzen).
+
+    Zwei Modi ueber config.pattern_combine_mode:
+    - "confirm":  Pattern-Signal muss dem Indikator-Signal in Richtung UND
+                  Mindest-Konfidenz (config.pattern_min_confidence) zustimmen.
+    - "weighted": gewichtete Kombination aus Indikator-Richtung (+-1) und
+                  Pattern-Score (config.pattern_weight steuert das Gewicht
+                  des Pattern-Anteils); nur wenn die Kombination weiterhin
+                  in die urspruengliche Richtung zeigt, bleibt das Signal.
+    """
+    if not config.pattern_enabled or base_signal.action == Action.HOLD:
+        return base_signal
+
+    direction = 1 if base_signal.action == Action.BUY else -1
+
+    if config.pattern_combine_mode == "weighted":
+        combined_score = (1 - config.pattern_weight) * direction + config.pattern_weight * pattern_signal.score
+        agrees = (direction > 0 and combined_score > 0) or (direction < 0 and combined_score < 0)
+        detail = f"Pattern gewichtet (score={pattern_signal.score:+.2f}, combined={combined_score:+.2f}): {pattern_signal.reason}"
+    else:  # "confirm" (default / fail-safe fuer unbekannte Werte -- validate() faengt das vorher ab)
+        wanted_direction: str = "bullish" if direction > 0 else "bearish"
+        agrees = pattern_signal.direction == wanted_direction and pattern_signal.confidence >= config.pattern_min_confidence
+        detail = f"Pattern (Konfidenz {pattern_signal.confidence:.2f}): {pattern_signal.reason}"
+
+    if agrees:
+        return SignalResult(base_signal.action, f"{base_signal.reason} | Bestaetigt durch {detail}", base_signal.indicators)
+
+    return SignalResult(
+        Action.HOLD,
+        f"{base_signal.reason} | Verworfen, da Pattern nicht zustimmt ({detail}) -> HOLD.",
+        base_signal.indicators,
+    )

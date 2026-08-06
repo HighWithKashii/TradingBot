@@ -21,7 +21,13 @@ from trading_bot.config import Config
 from trading_bot.data_feed import MarketDataFeed
 from trading_bot.order_executor import OrderExecutionError, OrderExecutor
 from trading_bot.risk_manager import RiskManager
-from trading_bot.strategy import Action, compute_indicators, generate_signal
+from trading_bot.strategy import (
+    Action,
+    combine_with_pattern_signal,
+    compute_indicators,
+    generate_pattern_signal_from_config,
+    generate_signal,
+)
 from trading_bot.trade_logger import TradeLogger
 
 try:
@@ -148,6 +154,16 @@ class TradingBot:
             signal = generate_signal(df, self._config, has_open_position=position is not None)
             price = float(df.iloc[-1]["close"])
 
+            if self._config.pattern_enabled:
+                # Pattern-Modul laeuft auf den rohen OHLCV-Bars (nicht dem
+                # indikator-angereicherten `df`) und kann das Indikator-Signal
+                # nur bestaetigen oder auf HOLD zuruecksetzen, nie selbst
+                # einen Trade ausloesen -- siehe combine_with_pattern_signal.
+                pattern_signal = generate_pattern_signal_from_config(bars, self._config)
+                if pattern_signal.direction != "neutral":
+                    self._log_pattern_signal(symbol, pattern_signal)
+                signal = combine_with_pattern_signal(signal, pattern_signal, self._config)
+
             if signal.action == Action.BUY:
                 self._enter_long(symbol, price, equity, buying_power, signal.reason)
                 return "BUY"
@@ -165,6 +181,18 @@ class TradingBot:
             logger.exception("Unexpected error while processing %s", symbol)
             self._trade_logger.log(symbol=symbol, action="ERROR", reason=repr(exc), status="error")
             return "ERROR"
+
+    def _log_pattern_signal(self, symbol: str, pattern_signal) -> None:
+        """Eine kompakte Zeile pro tatsaechlich erkanntem Pattern-Signal
+        (direction != 'neutral') -- nicht pro gescanntem Symbol, damit das
+        bei 100 Symbolen nicht zuspammt. Volle Details landen ohnehin ueber
+        die BUY/SELL/HOLD-Zeile in trades.csv.
+        """
+        logger.info(
+            f"{Fore.CYAN}PATTERN {symbol}: {pattern_signal.direction.upper()} "
+            f"conf={pattern_signal.confidence:.2f} ({pattern_signal.pattern_type}) — "
+            f"{pattern_signal.reason}{Style.RESET_ALL}"
+        )
 
     def _enter_long(self, symbol: str, price: float, equity: float, buying_power: float, reason: str) -> None:
         qty = self._risk_manager.calculate_position_size(equity, buying_power, price)

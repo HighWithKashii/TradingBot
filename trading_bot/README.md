@@ -18,6 +18,8 @@ Vollautomatischer, modularer Trading-Bot fuer Alpaca (Paper-Trading zuerst).
 | `data_feed.py` | Alpaca Marktdaten (historische Bars per Batch-Requests, Market Clock). |
 | `order_executor.py` | Alpaca Order-Ausfuehrung (Bracket-Orders mit SL/TP, Positionen schliessen). |
 | `trade_logger.py` | Schreibt jede Entscheidung (inkl. HOLD/Begruendung) in eine CSV-Datei. |
+| `patterns.py` | Trendlinien-/Chartmuster-Erkennung (Pivots, Trendlinien, Breakouts) -- komplett eigenstaendig, kennt weder Config noch Alpaca. |
+| `backtest.py` | Backtest-Modul: spielt die Strategie (inkl. Pattern-Modul) auf historischen Daten durch. |
 | `bot.py` | Haupt-Loop: Marktzeiten pruefen, Watchlist durchgehen, Fehlerbehandlung pro Symbol. |
 | `main.py` | Einstiegspunkt (`python -m trading_bot.main`). |
 
@@ -127,6 +129,63 @@ noetig (Bars + Position pro Symbol). Stattdessen:
   Zyklus (1x Clock, 1x Account, 1x Positionen, ~3-4x Kursdaten-Batches) und
   bleibt damit weit unter jedem sinnvollen `CHECK_INTERVAL_MINUTES`.
 
+## Pattern-Erkennung (Trendlinien & Chartmuster)
+
+Zusaetzlich zur Indikator-Strategie (SMA/MACD/RSI) gibt es ein **komplett
+eigenstaendiges** Modul (`patterns.py`), das automatisch Trendlinien und
+einfache Chartmuster aus den Kursdaten berechnet -- quantitativ und
+deterministisch, kein manuelles Einzeichnen:
+
+- **Swing-Highs/-Lows:** lokale Hoch-/Tiefpunkte ueber ein Fenster von
+  `PATTERN_PIVOT_WINDOW` Kerzen links/rechts (Standard 4).
+- **Trendlinien:** lineare Regression durch die juengsten `PATTERN_MIN_TRENDLINE_PIVOTS`
+  bis `PATTERN_MAX_TRENDLINE_PIVOTS` Swing-Lows (Support/Aufwaertstrend) bzw.
+  Swing-Highs (Resistance/Abwaertstrend). Wird bei jedem Aufruf komplett neu
+  aus den aktuell vorliegenden Kerzen berechnet, keine gespeicherte Linie.
+- **Signale:** signifikanter Trendlinienbruch (Schlusskurs bricht um mehr als
+  `PATTERN_BREAKOUT_THRESHOLD_PCT` % durch die extrapolierte Linie), hoehere
+  Tiefs/tiefere Hochs als Trendbestaetigung ohne Bruch, sowie eine einfache
+  Double-Top/Bottom-Erkennung und Support-/Resistance-Zonen aus gehaeuften
+  Pivots. Jedes Signal hat einen **Konfidenzwert** (0-1) aus Anzahl
+  bestaetigender Pivots, Guete der Regression (R²), Winkel der Linie und
+  (falls vorhanden) Volumenbestaetigung.
+
+**An-/Ausschalten:** `PATTERN_ENABLED=true|false` in `.env` (Standard: `false`,
+also aus -- ohne diese Variable aendert sich am Verhalten des Bots nichts).
+
+**Kombination mit der bestehenden Strategie** (`PATTERN_COMBINE_MODE`):
+Das Pattern-Modul **ersetzt** die Indikator-Strategie nicht und kann von sich
+aus **keinen** Trade ausloesen -- ist das Indikator-Signal HOLD, bleibt es
+HOLD, unabhaengig davon, wie stark das Pattern-Signal ist. Es kann nur ein
+bereits vorhandenes BUY/SELL bestaetigen (durchlassen) oder verwerfen
+(zurueck auf HOLD):
+
+- `confirm` (Standard): Pattern-Signal muss dem Indikator-Signal in Richtung
+  UND Mindest-Konfidenz (`PATTERN_MIN_CONFIDENCE`) zustimmen, sonst HOLD.
+- `weighted`: gewichtete Kombination aus Indikator-Richtung (±1) und
+  Pattern-Score (`PatternSignal.score`, zwischen -1 und +1), Gewicht des
+  Pattern-Anteils ueber `PATTERN_WEIGHT` (0-1). Rein rechnerisch kann ein
+  `PATTERN_WEIGHT <= 0.5` die Indikator-Richtung NIE umkehren (der
+  Pattern-Score ist auf ±1 begrenzt, das reicht dann nicht aus) -- bei den
+  Standardeinstellungen wirkt `weighted` also eher als leichte Bestaetigung
+  im Log/in trades.csv, veraendert das Ergebnis gegenueber "kein Pattern-Modul"
+  aber selten. Erst mit `PATTERN_WEIGHT > 0.5` kann das Pattern-Signal ein
+  Indikator-Signal tatsaechlich auf HOLD zuruecksetzen.
+
+**Wichtig:** Da ein SELL-Signal im `confirm`-Modus ebenfalls die Zustimmung
+des Pattern-Moduls braucht, kann eine offene Position bei aktivem
+Pattern-Modul laenger offen bleiben, als es der reine Indikator-Exit vorsehen
+wuerde -- der Stop-Loss aus der Bracket-Order greift trotzdem immer
+unveraendert (siehe Risikomanagement). Vor dem Live-/Paper-Einsatz mit
+`PATTERN_ENABLED=true` unbedingt zuerst `backtest.py` nutzen (siehe unten).
+
+**Logging:** eine kompakte Zeile pro tatsaechlich erkanntem Pattern (nicht
+pro gescanntem Symbol), z. B.:
+
+```
+PATTERN AAPL: BULLISH conf=0.79 (trendline_breakout_up) — Ausbruch ueber Abwaertstrendlinie (4 Hochs, Winkel -16.6°, R²=1.00)
+```
+
 ## Risikomanagement
 
 - **Positionsgroesse:** `POSITION_SIZE_PCT` % des Account-Equity pro Trade (nach oben durch verfuegbare Buying Power begrenzt).
@@ -159,6 +218,9 @@ dort **nicht** ausgegeben. Stattdessen:
   ```
   Scan complete: 2 BUY, 1 SELL, 95 HOLD, 1 ERROR (duration: 45.3s)
   ```
+- **Pro erkanntem Pattern** (nur wenn `PATTERN_ENABLED=true` und tatsaechlich
+  ein Trendlinienbruch/-muster gefunden wurde, siehe oben) eine zusaetzliche
+  cyanfarbene Zeile.
 
 ## Fehlerbehandlung
 
@@ -176,8 +238,40 @@ dort **nicht** ausgegeben. Stattdessen:
   bestaetigter Stornierung wegen eines kurzen Timings-Races bei Alpaca noch
   einmal fehl, wird automatisch mit kurzem Backoff erneut versucht.
 
+## Backtesting
+
+**Vor jedem Einsatz von `PATTERN_ENABLED=true` im Live-/Paper-Betrieb** sollte
+`backtest.py` gegen historische Daten laufen, um zu pruefen, ob das
+Pattern-Modul die Ergebnisse tatsaechlich verbessert oder verschlechtert.
+
+```bash
+python -m trading_bot.backtest --symbol AAPL --days 730
+```
+
+- **Datenquelle:** zuerst Alpacas historische Markt-API (wenn gueltige Keys
+  in `.env` stehen), sonst automatisch **yfinance** als Fallback (kein
+  Alpaca-Account noetig -- `pip install yfinance`, ist in `requirements.txt`
+  als optionale Abhaengigkeit vermerkt).
+- **Simulation:** spielt Balken fuer Balken **dieselben Funktionen** durch,
+  die auch der Live-Bot nutzt (`strategy.generate_signal` +, falls aktiv,
+  das Pattern-Modul) -- long-only, eine Position gleichzeitig, Stop-Loss/
+  Take-Profit exakt wie die Live-Bracket-Order (`STOP_LOSS_PCT`/`TAKE_PROFIT_PCT`),
+  Positionsgroesse gemaess `POSITION_SIZE_PCT` (kein 100 %-des-Kapitals-Fantasieergebnis).
+- **Output:** Trefferquote, durchschnittlicher Gewinn/Verlust pro Trade,
+  Anzahl Trades, Gesamtrendite, Max Drawdown.
+- Ohne `--no-compare` (Standard) laeuft der Backtest automatisch **zweimal**
+  -- einmal ohne, einmal mit Pattern-Modul -- und druckt beide Reports
+  direkt untereinander zum Vergleich.
+- **Bekannte Vereinfachung:** das Tagesverlust-Limit (`MAX_DAILY_LOSS_PCT`)
+  wird im Backtest nicht simuliert, nur Stop-Loss/Take-Profit und die
+  Signal-Exit-Logik. Der Backtest arbeitet zudem pro Balken mit einer
+  Neuberechnung der Indikatoren auf dem bis dahin sichtbaren Fenster (keine
+  inkrementelle Aktualisierung) -- fuer taegliche Bars ueber mehrere Jahre
+  performant genug, fuer sehr lange Intraday-Historien nicht ausgelegt.
+
 ## Naechste Schritte / Anpassungen
 
 - Neue Strategie? `strategy.generate_signal` austauschen/erweitern.
 - Anderes Sizing (z. B. ATR-basiert)? Nur `risk_manager.py` anfassen.
 - Anderer Broker/Datenanbieter? Nur `data_feed.py` / `order_executor.py` ersetzen, die Schnittstellen (`get_bars`, `submit_bracket_buy`, ...) bleiben gleich.
+- Andere/mehr Chartmuster? Nur `patterns.py` anfassen (komplett eigenstaendig, kein Bezug zu Config/Alpaca).

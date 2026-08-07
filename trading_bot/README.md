@@ -22,6 +22,8 @@ Vollautomatischer, modularer Trading-Bot fuer Alpaca (Paper-Trading zuerst).
 | `backtest.py` | Backtest-Modul: spielt die Strategie (inkl. Pattern-Modul) auf historischen Daten durch. |
 | `bot.py` | Haupt-Loop: Marktzeiten pruefen, Watchlist durchgehen, Fehlerbehandlung pro Symbol. |
 | `main.py` | Einstiegspunkt (`python -m trading_bot.main`). |
+| `api_server.py` | Read-only Status-API fuers Mobile-Dashboard (`python -m trading_bot.api_server`), siehe unten. |
+| `dashboard/index.html` | Statische Dashboard-Seite fuers Handy (GitHub Pages), siehe unten. |
 
 Jedes Modul laesst sich unabhaengig austauschen — z. B. eine andere Strategie
 in `strategy.py`, ein anderes Sizing-Modell in `risk_manager.py`, oder ein
@@ -29,18 +31,22 @@ anderer Broker in `data_feed.py`/`order_executor.py`.
 
 ## Setup
 
+Alle Befehle unten gehen vom **Projekt-Root** aus (dem Verzeichnis, das den
+Ordner `trading_bot/` enthaelt) -- `python -m trading_bot.xxx` findet das
+Package nur von dort aus, nicht von innerhalb von `trading_bot/` selbst.
+
 ```bash
-cd trading_bot
-python -m venv .venv
-source .venv/bin/activate  # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
-cp .env.example .env
+python -m venv trading_bot/.venv
+source trading_bot/.venv/bin/activate  # Windows: trading_bot\.venv\Scripts\activate
+pip install -r trading_bot/requirements.txt
+cp trading_bot/.env.example trading_bot/.env
 ```
 
-Trage in `.env` deine **Paper-Trading**-API-Keys ein (https://app.alpaca.markets,
-"Paper Trading" Bereich). `ALPACA_PAPER=true` sorgt dafuer, dass ausschliesslich
-der Paper-Endpunkt (`paper-api.alpaca.markets`) verwendet wird. Keys stehen
-ausschliesslich in `.env` (nicht eingecheckt, siehe `.gitignore`) — niemals im Code.
+Trage in `trading_bot/.env` deine **Paper-Trading**-API-Keys ein
+(https://app.alpaca.markets, "Paper Trading" Bereich). `ALPACA_PAPER=true`
+sorgt dafuer, dass ausschliesslich der Paper-Endpunkt
+(`paper-api.alpaca.markets`) verwendet wird. Keys stehen ausschliesslich in
+`.env` (nicht eingecheckt, siehe `.gitignore`) — niemals im Code.
 
 ## Start
 
@@ -268,6 +274,84 @@ python -m trading_bot.backtest --symbol AAPL --days 730
   Neuberechnung der Indikatoren auf dem bis dahin sichtbaren Fenster (keine
   inkrementelle Aktualisierung) -- fuer taegliche Bars ueber mehrere Jahre
   performant genug, fuer sehr lange Intraday-Historien nicht ausgelegt.
+
+## Mobile-Dashboard
+
+Ein schreibgeschuetztes Status-Dashboard fuers Handy, bestehend aus zwei
+unabhaengigen Teilen: einem kleinen API-Server, der neben dem Bot laeuft
+(z. B. auf einem Raspberry Pi), und einer statischen Seite ohne jeglichen
+Server-Code oder Keys, die du auf GitHub Pages hostest.
+
+### 1. `api_server.py` auf dem Pi (neben dem Bot)
+
+Liest dieselben Alpaca-Keys aus `trading_bot/.env` -- keine zweite
+Schluessel-Verwaltung. Stellt **nur** einen lesenden Endpoint bereit
+(`GET /api/status`: Kontostand, Tages-P&L, offene Positionen, die letzten
+10 BUY/SELL-Trades aus `trades.csv`, Paper/Live-Flag), keine Order-Routen.
+
+```bash
+# einmalig, im bereits aktivierten venv (siehe Setup oben):
+pip install flask flask-cors   # oder: pip install -r trading_bot/requirements.txt
+
+# Start (vom Projekt-Root aus, wie main.py):
+python -m trading_bot.api_server
+```
+
+Beim allerersten Start wird automatisch ein zufaelliges Zugriffs-Token
+erzeugt und in `trading_bot/dashboard_token.txt` gespeichert (Dateirechte
+nur fuer den Owner, nicht eingecheckt) -- das Token wird einmal in der
+Konsole ausgegeben und muss anschliessend nur einmalig ins Dashboard
+eingetragen werden (siehe unten). Jeder Request an `/api/status` ohne
+passenden Header `X-Dashboard-Token` bekommt `401 Unauthorized`.
+
+**Dauerhaft laufen lassen (tmux):**
+
+```bash
+tmux new -s dashboard-api
+python -m trading_bot.api_server
+# Session verlassen, Prozess laeuft weiter: Strg+B, dann D
+# Spaeter wieder reinschauen: tmux attach -t dashboard-api
+```
+
+**Fernzugriff vom Handy:** Der Server bindet auf `0.0.0.0:5000`, ist also im
+lokalen Netz erreichbar -- fuer Zugriff von unterwegs empfiehlt sich
+[Tailscale](https://tailscale.com) auf dem Pi UND dem Handy (kostenlos fuer
+den Privatgebrauch): einfach installieren, einloggen, dann ist der Pi ueber
+seine Tailscale-IP (z. B. `100.x.x.x`) aus dem Tailscale-Netz erreichbar,
+ganz ohne Portfreigabe im Router. Diese IP + Port 5000 traegst du gleich als
+Server-Adresse im Dashboard ein.
+
+> Der eingebaute Flask-Dev-Server ("this is a development server...") reicht
+> hier voellig aus -- das Dashboard ist ein privates Ein-Personen-Tool hinter
+> Tailscale, kein oeffentlich erreichbarer Dienst.
+
+### 2. `dashboard/index.html` auf GitHub Pages
+
+Komplett statisch, kein Server-Code, keine Keys im Code -- API-Adresse und
+Token werden erst zur Laufzeit im Browser des Nutzers eingegeben und nur
+lokal in `localStorage` auf dem jeweiligen Geraet gespeichert.
+
+**Hosten:** `trading_bot/dashboard/index.html` kollidiert bewusst nicht mit
+der bestehenden `index.html` im Projekt-Root (eine andere, unabhaengige
+Seite) -- am saubersten in einem eigenen kleinen GitHub-Repo dediziert fuers
+Dashboard hosten (Repo anlegen, `index.html` ins Root legen, unter
+**Settings → Pages** die Quelle auf den `main`-Branch stellen). Alternativ,
+falls GitHub Pages fuer dieses Repo bereits eingerichtet ist: je nach
+Pages-Konfiguration ist die Datei dann unter
+`https://<username>.github.io/<repo>/trading_bot/dashboard/` erreichbar.
+
+**Einrichten:**
+1. Seite im Handy-Browser oeffnen -- beim allerersten Aufruf oeffnet sich
+   automatisch das Einstellungen-Modal (Zahnrad-Icon oben rechts oeffnet es
+   auch spaeter wieder).
+2. Server-Adresse eintragen (Tailscale-IP des Pi + Port, z. B.
+   `http://100.x.x.x:5000`) und das Token aus `dashboard_token.txt`.
+3. Speichern -- das Dashboard aktualisiert sich danach automatisch alle 30
+   Sekunden. Ist der Pi nicht erreichbar oder das Token falsch, wird das
+   klar als Banner angezeigt (keine leere Seite).
+4. **Zum Home-Bildschirm hinzufuegen (iPhone):** Seite in Safari oeffnen,
+   Teilen-Icon → "Zum Home-Bildschirm" -- startet dann wie eine eigene App,
+   ohne Safari-Adressleiste.
 
 ## Naechste Schritte / Anpassungen
 

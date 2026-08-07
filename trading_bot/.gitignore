@@ -3,3 +3,4 @@
 __pycache__/
 *.pyc
 trades.csv
+dashboard_token.txt

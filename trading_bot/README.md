@@ -375,6 +375,14 @@ die vorherige Seite -- unter **Settings → Pages** die Quelle auf den
    Teilen-Icon → "Zum Home-Bildschirm" -- startet dann wie eine eigene App,
    ohne Safari-Adressleiste.
 
+## 24/7-Absicherung (Hardware-Watchdog, Auto-Restart, Health-Checks, ...)
+
+Fuer unbeaufsichtigten Dauerbetrieb (z.B. auf einem Raspberry Pi) siehe
+[`../deploy/README.md`](../deploy/README.md): Hardware-Watchdog, systemd-
+Services mit Auto-Restart und Speicherlimit, ein Health-Check-Cronjob mit
+automatischer Selbstheilung, Log-Rotation, SD-Karten-Schonung, woechentlicher
+Wartungs-Reboot und Telegram-Benachrichtigungen bei Problemen.
+
 ## Naechste Schritte / Anpassungen
 
 - Neue Strategie? `strategy.generate_signal` austauschen/erweitern.

@@ -23,7 +23,7 @@ Vollautomatischer, modularer Trading-Bot fuer Alpaca (Paper-Trading zuerst).
 | `bot.py` | Haupt-Loop: Marktzeiten pruefen, Watchlist durchgehen, Fehlerbehandlung pro Symbol. |
 | `main.py` | Einstiegspunkt (`python -m trading_bot.main`). |
 | `api_server.py` | Read-only Status-API fuers Mobile-Dashboard (`python -m trading_bot.api_server`), siehe unten. |
-| `dashboard/index.html` | Statische Dashboard-Seite fuers Handy (GitHub Pages), siehe unten. |
+| `index.html` (im Projekt-Root, eine Ebene ueber `trading_bot/`) | Statische Dashboard-Seite fuers Handy (GitHub Pages), siehe unten. |
 
 Jedes Modul laesst sich unabhaengig austauschen — z. B. eine andere Strategie
 in `strategy.py`, ein anderes Sizing-Modell in `risk_manager.py`, oder ein
@@ -304,6 +304,25 @@ Konsole ausgegeben und muss anschliessend nur einmalig ins Dashboard
 eingetragen werden (siehe unten). Jeder Request an `/api/status` ohne
 passenden Header `X-Dashboard-Token` bekommt `401 Unauthorized`.
 
+**HTTPS/TLS:** Der Server laeuft ueber HTTPS mit dem per Tailscale
+ausgestellten Zertifikat -- notwendig, weil die Dashboard-Seite auf
+GitHub Pages per HTTPS ausgeliefert wird und Browser einer HTTPS-Seite
+nicht erlauben, Daten von einer unverschluesselten HTTP-Adresse
+nachzuladen ("Mixed Content"). Einmalig auf dem Pi, **im Projekt-Root**
+(nicht in `trading_bot/`):
+
+```bash
+sudo tailscale cert tradingbot.tailed8a6b.ts.net
+```
+
+Das legt `tradingbot.tailed8a6b.ts.net.crt` und `.key` im aktuellen
+Verzeichnis ab -- `api_server.py` erwartet beide Dateien im Projekt-Root
+und loest den Pfad dorthin auf, egal von wo aus `python -m
+trading_bot.api_server` gestartet wird. Fehlt eine der beiden Dateien
+(z. B. Zertifikat abgelaufen), bricht der Server beim Start mit einer
+klaren Fehlermeldung ab, die genau diesen Befehl noch einmal nennt,
+statt mit einem unklaren Traceback abzustuerzen.
+
 **Dauerhaft laufen lassen (tmux):**
 
 ```bash
@@ -316,36 +335,39 @@ python -m trading_bot.api_server
 **Fernzugriff vom Handy:** Der Server bindet auf `0.0.0.0:5000`, ist also im
 lokalen Netz erreichbar -- fuer Zugriff von unterwegs empfiehlt sich
 [Tailscale](https://tailscale.com) auf dem Pi UND dem Handy (kostenlos fuer
-den Privatgebrauch): einfach installieren, einloggen, dann ist der Pi ueber
-seine Tailscale-IP (z. B. `100.x.x.x`) aus dem Tailscale-Netz erreichbar,
-ganz ohne Portfreigabe im Router. Diese IP + Port 5000 traegst du gleich als
-Server-Adresse im Dashboard ein.
+den Privatgebrauch): einfach installieren, einloggen, dann ist der Pi aus
+dem Tailscale-Netz erreichbar, ganz ohne Portfreigabe im Router.
+
+Als Server-Adresse im Dashboard **den Tailscale-Hostnamen verwenden, nicht
+die numerische Tailscale-IP**: `https://tradingbot.tailed8a6b.ts.net:5000`.
+Das Zertifikat ist auf genau diesen Hostnamen ausgestellt -- ueber die IP
+aufgerufen wuerde der Browser eine Zertifikatswarnung zeigen (Hostname
+stimmt nicht ueberein). Da es sich um ein echtes, von Tailscale ausgestelltes
+Zertifikat handelt (keine Selbstsignierung), zeigt Safari auf dem iPhone bei
+korrekter Adresse keine Warnung.
 
 > Der eingebaute Flask-Dev-Server ("this is a development server...") reicht
 > hier voellig aus -- das Dashboard ist ein privates Ein-Personen-Tool hinter
 > Tailscale, kein oeffentlich erreichbarer Dienst.
 
-### 2. `dashboard/index.html` auf GitHub Pages
+### 2. `index.html` (Projekt-Root) auf GitHub Pages
 
 Komplett statisch, kein Server-Code, keine Keys im Code -- API-Adresse und
 Token werden erst zur Laufzeit im Browser des Nutzers eingegeben und nur
 lokal in `localStorage` auf dem jeweiligen Geraet gespeichert.
 
-**Hosten:** `trading_bot/dashboard/index.html` kollidiert bewusst nicht mit
-der bestehenden `index.html` im Projekt-Root (eine andere, unabhaengige
-Seite) -- am saubersten in einem eigenen kleinen GitHub-Repo dediziert fuers
-Dashboard hosten (Repo anlegen, `index.html` ins Root legen, unter
-**Settings → Pages** die Quelle auf den `main`-Branch stellen). Alternativ,
-falls GitHub Pages fuer dieses Repo bereits eingerichtet ist: je nach
-Pages-Konfiguration ist die Datei dann unter
-`https://<username>.github.io/<repo>/trading_bot/dashboard/` erreichbar.
+**Hosten:** Die Datei liegt im Projekt-Root (`index.html`) und ersetzt dort
+die vorherige Seite -- unter **Settings → Pages** die Quelle auf den
+`main`-Branch (Root) stellen, danach unter
+`https://<username>.github.io/<repo>/` erreichbar.
 
 **Einrichten:**
 1. Seite im Handy-Browser oeffnen -- beim allerersten Aufruf oeffnet sich
    automatisch das Einstellungen-Modal (Zahnrad-Icon oben rechts oeffnet es
    auch spaeter wieder).
-2. Server-Adresse eintragen (Tailscale-IP des Pi + Port, z. B.
-   `http://100.x.x.x:5000`) und das Token aus `dashboard_token.txt`.
+2. Server-Adresse eintragen (Tailscale-Hostname des Pi + Port, z. B.
+   `https://tradingbot.tailed8a6b.ts.net:5000`) und das Token aus
+   `dashboard_token.txt`.
 3. Speichern -- das Dashboard aktualisiert sich danach automatisch alle 30
    Sekunden. Ist der Pi nicht erreichbar oder das Token falsch, wird das
    klar als Banner angezeigt (keine leere Seite).

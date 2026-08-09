@@ -177,7 +177,8 @@ else
     fi
 fi
 run_or_plan chmod +x "$SCRIPT_DIR/scripts/healthcheck.sh" "$SCRIPT_DIR/scripts/notify.sh" \
-    "$SCRIPT_DIR/scripts/weekly_reboot.sh" "$SCRIPT_DIR/scripts/boot_notify.sh"
+    "$SCRIPT_DIR/scripts/weekly_reboot.sh" "$SCRIPT_DIR/scripts/boot_notify.sh" \
+    "$SCRIPT_DIR/migrate_from_tmux.sh"
 
 # ---------- Cron-Daemon sicherstellen ----------
 run_or_plan apt-get install -y cron

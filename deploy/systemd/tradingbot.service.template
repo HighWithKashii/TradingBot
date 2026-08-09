@@ -30,12 +30,12 @@ Restart=always
 RestartSec=10
 
 ; Speicherlimit gegen einen durchgehenden Memory-Leak, der sonst den
-; kompletten Pi (nur 512MB RAM beim Pi Zero 2 W) in die Knie zwingen wuerde.
+; kompletten Pi (nur 512MB RAM beim Pi Zero W) in die Knie zwingen wuerde.
 ; MemoryHigh ist ein weicher Drosselpunkt (cgroup wird unter Druck gesetzt,
 ; bekommt aber noch eine Chance sich zu erholen), MemoryMax ist hart -- wird
 ; er ueberschritten, killt der Kernel-OOM-Killer den Prozess innerhalb
 ; dieser Unit, Restart=always startet danach neu. Startwerte fuer einen Pi
-; Zero 2 W (512MB gesamt); nach ein paar Tagen realem Betrieb mit
+; Zero W (512MB gesamt, single-core); nach ein paar Tagen realem Betrieb mit
 ; `systemctl status tradingbot` / `free -h` pruefen und ueber
 ; `sudo systemctl edit tradingbot` bei Bedarf anpassen (siehe README).
 MemoryHigh=256M

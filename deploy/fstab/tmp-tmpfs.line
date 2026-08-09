@@ -3,7 +3,7 @@
 # /tmp standardmaessig NICHT als tmpfs -- es liegt ohne diese Zeile ganz
 # normal auf der SD-Karte wie jedes andere Verzeichnis.
 #
-# size=64M ist bewusst klein gewaehlt (Pi Zero 2 W hat nur 512MB RAM
+# size=64M ist bewusst klein gewaehlt (Pi Zero W hat nur 512MB RAM
 # insgesamt): reicht fuer healthcheck.sh's paar Byte grosse Dedup-Flags
 # unter /tmp/tradingbot-health/ und uebliche kurzlebige /tmp-Nutzung
 # (z.B. durch pip/apt), ohne dem restlichen System spuerbar RAM wegzunehmen.

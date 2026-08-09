@@ -1,4 +1,4 @@
-# Trading-Bot Absicherung fuer 24/7-Betrieb (Raspberry Pi Zero 2 W)
+# Trading-Bot Absicherung fuer 24/7-Betrieb (Raspberry Pi Zero W)
 
 Macht den Trading-Bot robust gegen eine Woche unbeaufsichtigten Betrieb:
 Hardware-Watchdog, Auto-Restart mit Grenzen, Health-Checks mit
@@ -6,17 +6,26 @@ Selbstheilung, Log-Rotation, SD-Karten-Schonung, woechentlicher
 Wartungs-Reboot und Telegram-Benachrichtigungen.
 
 > **Hinweis zur Herkunft dieser Dateien:** dieses `deploy/`-Verzeichnis
-> wurde in einer Cloud-Sandbox ohne echten Raspberry Pi erstellt. Jede
-> Konfigurationsdatei wurde einzeln validiert (`systemd-analyze verify`
-> fuer alle Units, der echte `watchdog`- und `logrotate`-Binary gegen die
-> jeweiligen configs, ein echter `cron`-Daemon gegen alle `/etc/cron.d/`-
-> Dateien, `healthcheck.sh`/`notify.sh`/`weekly_reboot.sh`/`boot_notify.sh`
-> gegen 40+ Testfaelle mit simulierten `systemctl`/`tailscale`/`df`/`free`/
-> `curl`-Ausgaben, `install.sh` selbst gegen ein Fake-Root-Dateisystem in
-> beiden Dry-Run- und `--apply`-Modi inkl. Wiederholungslauf). Was sich
-> NICHT aus der Ferne testen liess -- der echte `bcm2835_wdt`-Hardware-
-> Trigger, ein echter Tailscale-Reconnect, echte SD-Karten-Lebensdauer --
-> ist unten mit dem jeweiligen Pruef-Befehl markiert.
+> wurde in einer Cloud-Sandbox ohne echten Raspberry Pi erstellt -- es gibt
+> von dort keine SSH-/Netzwerkverbindung zum tatsaechlichen Pi
+> (`bene635@tradingbot`). Jede Konfigurationsdatei wurde einzeln
+> validiert (`systemd-analyze verify` fuer alle Units, der echte
+> `watchdog`- und `logrotate`-Binary gegen die jeweiligen configs, ein
+> echter `cron`-Daemon gegen alle `/etc/cron.d/`-Dateien,
+> `healthcheck.sh`/`notify.sh`/`weekly_reboot.sh`/`boot_notify.sh`/
+> `migrate_from_tmux.sh` gegen 45+ Testfaelle mit simulierten
+> `systemctl`/`tailscale`/`tmux`/`df`/`free`/`curl`-Ausgaben, `install.sh`
+> selbst gegen ein Fake-Root-Dateisystem in beiden Dry-Run- und
+> `--apply`-Modi inkl. Wiederholungslauf). Was sich NICHT aus der Ferne
+> testen liess -- der echte `bcm2835_wdt`-Hardware-Trigger, ein echter
+> Tailscale-Reconnect, echte SD-Karten-Lebensdauer -- ist unten mit dem
+> jeweiligen Pruef-Befehl markiert.
+>
+> `install.sh`/`migrate_from_tmux.sh` erkennen Repo-Pfad, Benutzer und
+> Gruppe automatisch zur Laufzeit (kein Hardcoding) -- sie funktionieren
+> daher unveraendert mit dem konkreten Setup `bene635@tradingbot`,
+> `~/BeanFocus/`, Tailscale-Domain `tradingbot.tailed8a6b.ts.net` (identisch
+> zum bereits in `trading_bot/api_server.py` verwendeten Zertifikatsnamen).
 
 ## Uebersicht
 
@@ -30,23 +39,63 @@ Wartungs-Reboot und Telegram-Benachrichtigungen.
 | 6 | Woechentlicher Wartungs-Reboot (Sonntag 03:00) | `scripts/weekly_reboot.sh`, `cron/tradingbot-weekly-reboot.template` |
 | 7 | Telegram-Benachrichtigungen (inkl. Watchdog-Reboot-Erkennung) | `scripts/notify.sh`, `scripts/boot_notify.sh`, `notify.conf.example` |
 | -- | Installations-/Update-Skript fuer alles oben | `install.sh` |
+| -- | Sichere Migration von den bestehenden tmux-Sessions | `migrate_from_tmux.sh` |
 
 **Nicht in den 8 Anforderungen explizit verlangt, aber ergaenzt:** ein
-systemd-Service fuer `api_server.py` (Dashboard-API,
-`tradingbot-dashboard.service`) -- bisher lief das nur manuell per tmux.
-Ohne Auto-Restart waere ausgerechnet die Dashboard-Sicht genau dann weg,
-wenn man sie am dringendsten braucht. Wer lieber bei tmux bleibt: die
-Zeilen `tradingbot-dashboard.service` in `install.sh` einfach nicht
-mitlaufen lassen (Service danach `sudo systemctl disable --now
-tradingbot-dashboard`).
+systemd-Service fuer `api_server.py` (Dashboard-API, `tradingbot-dashboard.service`,
+entspricht der bisherigen tmux-Session `api`). Ohne Auto-Restart waere
+ausgerechnet die Dashboard-Sicht genau dann weg, wenn man sie am
+dringendsten braucht. Wer lieber bei tmux bleibt: die Zeilen fuer
+`tradingbot-dashboard.service` in `install.sh` einfach nicht mitlaufen
+lassen (Service danach `sudo systemctl disable --now tradingbot-dashboard`).
 
 ## Installation
 
-Auf dem Pi, mit bereits eingerichtetem venv (siehe `trading_bot/README.md`,
-Abschnitt Setup):
+### Migration von den bestehenden tmux-Sessions (`bot` / `api`)
+
+Das ist der empfohlene Weg fuer das aktuelle Setup: Bot und Dashboard
+laufen bereits in tmux-Sessions `bot`/`api`, die durch die neuen
+systemd-Services abgeloest werden sollen, **ohne** dass zwischendurch
+beides gleichzeitig unkontrolliert laeuft oder der Bot fuer laengere Zeit
+komplett steht.
 
 ```bash
-cd /pfad/zu/deinem/TradingBot-Checkout
+cd ~/BeanFocus
+sudo deploy/migrate_from_tmux.sh              # Schritte 1-3, tmux bleibt unangetastet
+```
+
+Das Skript:
+1. **Bestandsaufnahme** -- zeigt, ob `bot`/`api` in tmux laufen, ob
+   `trading_bot/.env` einen API-Key enthaelt (Inhalt wird nie ausgegeben),
+   ob `trades.csv` und das venv vorhanden sind, und ob bereits
+   systemd-/Cron-Dateien von einem frueheren Lauf existieren.
+2. **Richtet die neuen systemd-Services ein** (ruft intern `install.sh --apply` auf).
+3. **Verifiziert:** sind `tradingbot`/`tradingbot-dashboard` aktiv, antwortet
+   die Dashboard-API tatsaechlich auf `https://127.0.0.1:5000/`, gibt es
+   frische Fehlermeldungen im Bot-Log der letzten Minute? Nur wenn das
+   alles gruen ist, gilt die Verifikation als bestanden.
+
+Die alten tmux-Sessions werden dabei **nicht angefasst** -- Bot und
+Dashboard laufen ab hier faktisch doppelt (einmal tmux, einmal systemd).
+Das ist gewollt: erst selbst gegenpruefen (z.B. `systemctl status
+tradingbot`, das Dashboard im Handy-Browser oeffnen, `trades.csv`
+beobachten), dann **erst danach** die tmux-Sessions bewusst beenden:
+
+```bash
+sudo deploy/migrate_from_tmux.sh --stop-tmux
+```
+
+Das beendet `bot`/`api` **nur**, wenn (a) die Verifikation aus Schritt 3
+bestanden hat -- schlaegt sie fehl, bricht das Skript vorher ab, egal ob
+`--stop-tmux` angegeben wurde -- und (b) du das direkt in einer
+interaktiven Shell auf dem Pi (nicht per Skript/Cron) noch einmal einzeln
+mit `j` bestaetigst. Beides zusammen soll verhindern, dass der laufende
+Bot durch einen automatisierten Schritt ausversehen komplett offline geht.
+
+### Frische Installation (kein bestehendes tmux-Setup)
+
+```bash
+cd ~/BeanFocus
 sudo deploy/install.sh              # Dry-Run: zeigt alle geplanten Aenderungen
 sudo deploy/install.sh --apply      # fuehrt sie aus
 sudo reboot                         # laedt bcm2835_wdt, aktiviert tmpfs /tmp
@@ -55,11 +104,15 @@ sudo reboot                         # laedt bcm2835_wdt, aktiviert tmpfs /tmp
 `install.sh` ist **idempotent** -- mehrfaches Ausfuehren (z.B. nach einem
 `git pull` mit Aenderungen in `deploy/`) ueberschreibt nur die generierten
 Dateien neu und haengt Zeilen (in `/etc/modules`, `/etc/fstab`,
-`config.txt`) nur an, wenn sie noch nicht vorhanden sind.
+`config.txt`) nur an, wenn sie noch nicht vorhanden sind. Repo-Pfad,
+Betriebssystem-Benutzer und venv-Pfad werden automatisch zur Laufzeit
+erkannt (kein manuelles Anpassen der Templates noetig).
 
-**Danach:** `deploy/notify.conf` mit den Telegram-Zugangsdaten fuellen
-(Anleitung in `deploy/notify.conf.example`) -- ohne diese Datei laufen
-Health-Check und Reboots trotzdem, nur eben ohne Benachrichtigung.
+**Nach beiden Wegen:** `deploy/notify.conf` mit den Telegram-Zugangsdaten
+fuellen (Anleitung in `deploy/notify.conf.example`) -- ohne diese Datei
+laufen Health-Check und Reboots trotzdem, nur eben ohne Benachrichtigung.
+Danach `sudo reboot`, damit `bcm2835_wdt` geladen und `/tmp` als tmpfs
+aktiv wird.
 
 ## Status pruefen
 
@@ -123,6 +176,18 @@ systemctl list-timers | grep -i cron || cat /etc/cron.d/tradingbot-weekly-reboot
   steht automatisch in `/var/log/healthcheck.log` (Zeile
   "System nach ... Neustart wieder hochgefahren") UND kommt per Telegram --
   alternativ `last reboot | head` fuer die reine Boot-Historie.
+- **Nach der Migration doch wieder zurueck auf tmux:**
+  ```bash
+  sudo systemctl disable --now tradingbot tradingbot-dashboard
+  cd ~/BeanFocus
+  tmux new -s bot -d 'python3 -m trading_bot.main'
+  tmux new -s api -d 'python3 -m trading_bot.api_server'
+  ```
+  Watchdog/Health-Check/Cron/logrotate koennen dabei problemlos aktiv
+  bleiben -- `healthcheck.sh` versucht dann zwar erfolglos, die (dann
+  gestoppten) systemd-Services neu zu starten, das ist aber nur eine
+  wiederkehrende Telegram-Nachricht, kein echter Schaden. Zum sauberen
+  Abschalten davon: siehe "Health-Check voruebergehend pausieren" oben.
 - **Alles rueckgaengig machen:**
   ```bash
   sudo systemctl disable --now tradingbot tradingbot-dashboard tradingbot-boot-notify watchdog
@@ -189,3 +254,13 @@ falls die strikte 7-Tage-Regel hier ausdruecklich doch gewuenscht ist.
   ausgefuehrt haben).
 - **Tatsaechliche SD-Karten-Lebensdauer-Verbesserung:** laesst sich nur
   ueber Monate/Jahre am echten Geraet beobachten, nicht in einer Sandbox.
+- **`migrate_from_tmux.sh` gegen echte tmux-Sessions/echten `bene635`-User:**
+  in der Sandbox liefen alle Testfaelle gegen einen gefakten `tmux`/`sudo`,
+  da hier weder eine echte tmux-Installation noch der Benutzer `bene635`
+  existiert. Die Skriptlogik selbst (Bestandsaufnahme, Aufruf von
+  `install.sh --apply`, Verifikation, die dreifache Sicherung vor dem
+  Beenden der Sessions) wurde so vollstaendig durchgetestet -- was auf dem
+  echten Pi als erstes zu pruefen ist: `sudo deploy/migrate_from_tmux.sh`
+  (ohne `--stop-tmux`) einmal laufen lassen und den Bestandsaufnahme- und
+  Verifikations-Output gegenlesen, bevor ueberhaupt `--stop-tmux` in
+  Erwaegung gezogen wird.

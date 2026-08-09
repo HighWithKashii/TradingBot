@@ -26,7 +26,7 @@ Restart=always
 RestartSec=10
 
 ; Deutlich kleinerer Speicherbedarf als der Bot selbst (kein pandas/numpy
-; auf dem Codepfad von api_server.py) -- Startwert fuer den Pi Zero 2 W.
+; auf dem Codepfad von api_server.py) -- Startwert fuer den Pi Zero W.
 MemoryHigh=100M
 MemoryMax=150M
 

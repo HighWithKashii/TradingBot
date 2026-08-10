@@ -19,6 +19,7 @@ from datetime import datetime, timezone
 
 from trading_bot.config import Config
 from trading_bot.data_feed import MarketDataFeed
+from trading_bot.notifier import TradeFailureNotifier
 from trading_bot.order_executor import OrderExecutionError, OrderExecutor
 from trading_bot.risk_manager import RiskManager
 from trading_bot.strategy import (
@@ -54,12 +55,14 @@ class TradingBot:
         executor: OrderExecutor,
         risk_manager: RiskManager,
         trade_logger: TradeLogger,
+        failure_notifier: TradeFailureNotifier | None = None,
     ):
         self._config = config
         self._data_feed = data_feed
         self._executor = executor
         self._risk_manager = risk_manager
         self._trade_logger = trade_logger
+        self._failure_notifier = failure_notifier or TradeFailureNotifier(config)
 
     def run_forever(self) -> None:
         config = self._config
@@ -207,7 +210,11 @@ class TradingBot:
             return
 
         prices = self._risk_manager.calculate_bracket_prices(price)
-        order = self._executor.submit_bracket_buy(symbol, qty, prices)
+        try:
+            order = self._executor.submit_bracket_buy(symbol, qty, prices)
+        except OrderExecutionError as exc:
+            self._failure_notifier.notify_order_failure(symbol, "Bracket Buy Order", exc)
+            raise
         logger.info(
             f"{Fore.GREEN}BUY {symbol} x{qty} @ ~{price:.2f} "
             f"(SL {prices.stop_loss:.2f} / TP {prices.take_profit:.2f}) — {reason}{Style.RESET_ALL}"
@@ -233,7 +240,11 @@ class TradingBot:
 
         realized_pnl = float(position.unrealized_pl)
         qty = float(position.qty)
-        order = self._executor.close_position(symbol)
+        try:
+            order = self._executor.close_position(symbol)
+        except OrderExecutionError as exc:
+            self._failure_notifier.notify_order_failure(symbol, "Sell Order", exc)
+            raise
         self._risk_manager.register_realized_pnl(realized_pnl)
         logger.info(
             f"{Fore.RED}SELL {symbol} x{qty:g} @ ~{price:.2f} "

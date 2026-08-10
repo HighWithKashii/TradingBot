@@ -136,6 +136,12 @@ class Config:
     # Logging
     trade_log_path: str = field(default_factory=lambda: os.getenv("TRADE_LOG_PATH", "trades.csv"))
 
+    # Telegram-Benachrichtigung bei fehlgeschlagenen Trades (siehe notifier.py).
+    # Komplett optional -- ohne Token/Chat-ID werden Fehlschlaege nur wie
+    # bisher geloggt, es gibt keine Telegram-Nachricht und keinen Fehler.
+    telegram_bot_token: str = field(default_factory=lambda: os.getenv("TELEGRAM_BOT_TOKEN", ""))
+    telegram_chat_id: str = field(default_factory=lambda: os.getenv("TELEGRAM_CHAT_ID", ""))
+
     @property
     def watchlist(self) -> list[str]:
         """The effective watchlist: the full Nasdaq-100 when USE_NASDAQ100=true,

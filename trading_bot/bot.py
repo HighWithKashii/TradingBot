@@ -17,6 +17,8 @@ import logging
 import time
 from datetime import datetime, timezone
 
+import pandas as pd
+
 from trading_bot.config import Config
 from trading_bot.data_feed import MarketDataFeed
 from trading_bot.notifier import TradeFailureNotifier
@@ -63,6 +65,60 @@ class TradingBot:
         self._risk_manager = risk_manager
         self._trade_logger = trade_logger
         self._failure_notifier = failure_notifier or TradeFailureNotifier(config)
+        # Vom Start-Backfill (siehe warm_up_with_backfill) fuer den ersten
+        # run_cycle() vorgeladene Bars, damit der allererste Zyklus nicht
+        # nochmal dieselben Daten frisch abruft. Wird nach einmaligem
+        # Gebrauch verworfen; siehe run_cycle() fuer die Freshness-Pruefung.
+        self._prefetched_bars: dict[str, pd.DataFrame] | None = None
+        self._prefetched_bars_at: float | None = None
+
+    def warm_up_with_backfill(self) -> None:
+        """Laedt beim Start genug historische Bars pro Watchlist-Symbol vor,
+        damit der Bot direkt im ersten Zyklus vollstaendige Indikatoren
+        berechnen kann, statt tage-/wochenlang nur "nicht genug Historie"
+        zu melden, waehrend Live-Daten erst nachgesammelt werden.
+        """
+        config = self._config
+        watchlist = config.watchlist
+        limit = config.min_bars_required + 10
+        logger.info(
+            "Backfill: lade historische %s-Bars fuer %d Symbole (min. %d Bars je Symbol benoetigt)...",
+            config.timeframe,
+            len(watchlist),
+            config.min_bars_required,
+        )
+        backfill_start = time.monotonic()
+        results = self._data_feed.backfill_bars(watchlist, limit=limit)
+        elapsed = time.monotonic() - backfill_start
+
+        sufficient = [s for s in watchlist if len(results.get(s, [])) >= config.min_bars_required]
+        partial = [
+            s for s in watchlist if s in results and 0 < len(results[s]) < config.min_bars_required
+        ]
+        failed = [s for s in watchlist if s not in results or len(results[s]) == 0]
+
+        logger.info(
+            "Backfill abgeschlossen in %.1fs: %d/%d Symbole mit vollstaendiger Historie, "
+            "%d mit unvollstaendiger Historie, %d fehlgeschlagen.",
+            elapsed,
+            len(sufficient),
+            len(watchlist),
+            len(partial),
+            len(failed),
+        )
+        if partial:
+            logger.warning(
+                "Unvollstaendige Backfill-Historie (noch nicht handelbar bis genug Live-Bars dazukommen): %s",
+                ", ".join(partial[:20]) + (", ..." if len(partial) > 20 else ""),
+            )
+        if failed:
+            logger.warning(
+                "Backfill fehlgeschlagen fuer: %s",
+                ", ".join(failed[:20]) + (", ..." if len(failed) > 20 else ""),
+            )
+
+        self._prefetched_bars = results
+        self._prefetched_bars_at = time.monotonic()
 
     def run_forever(self) -> None:
         config = self._config
@@ -87,6 +143,10 @@ class TradingBot:
             config.take_profit_pct,
             config.max_daily_loss_pct,
         )
+        try:
+            self.warm_up_with_backfill()
+        except Exception:
+            logger.exception("Backfill beim Start fehlgeschlagen -- Bot startet trotzdem, Indikatoren werden ueber die naechsten Live-Zyklen nachgesammelt.")
         while True:
             try:
                 self.run_cycle()
@@ -132,7 +192,19 @@ class TradingBot:
             logger.error("Could not fetch open positions — skipping cycle: %s", exc)
             return
 
-        bars_by_symbol = self._data_feed.get_bars_batch(watchlist, limit=self._config.min_bars_required + 10)
+        # Erster Zyklus nach dem Start: die vom Backfill vorgeladenen Bars
+        # wiederverwenden statt dieselben Daten nochmal abzurufen -- aber
+        # nur, wenn der Backfill nicht laenger als zwei Scan-Intervalle her
+        # ist (z.B. Deploy ausserhalb der Handelszeit, Markt oeffnet erst
+        # Stunden/Tage spaeter -> dann lieber frisch abrufen statt veraltete
+        # Bars zu verwenden).
+        max_prefetch_age = 2 * self._config.check_interval_minutes * 60
+        if self._prefetched_bars is not None and (time.monotonic() - self._prefetched_bars_at) < max_prefetch_age:
+            bars_by_symbol = self._prefetched_bars
+        else:
+            bars_by_symbol = self._data_feed.get_bars_batch(watchlist, limit=self._config.min_bars_required + 10)
+        self._prefetched_bars = None
+        self._prefetched_bars_at = None
 
         counts = {"BUY": 0, "SELL": 0, "HOLD": 0, "ERROR": 0}
         for symbol in watchlist:

@@ -58,6 +58,17 @@ Der Bot laeuft in einer Endlosschleife, prueft alle `CHECK_INTERVAL_MINUTES`
 Minuten die Watchlist, verlangt aber, dass die Boerse laut Alpaca-Clock
 geoeffnet ist. Mit `Strg+C` sauber beenden.
 
+Direkt beim Start laedt der Bot per Backfill (siehe `data_feed.backfill_bars`)
+fuer jedes Watchlist-Symbol genug historische Bars nach, damit SMA/EMA/RSI/MACD
+schon im allerersten Zyklus vollstaendig berechenbar sind -- kein tage-/
+wochenlanges "nicht genug Historie" mehr nach einem Neustart. Wie viele Bars
+das sind, ergibt sich automatisch aus der laengsten konfigurierten Periode
+(v.a. `SMA_SLOW`); Aenderungen an den `.env`-Parametern erfordern keine
+Anpassung. Ein einzelnes Symbol, das beim Backfill fehlschlaegt (z.B.
+kurzzeitiger Alpaca-Ausfall, nach 3 Versuchen), blockiert nicht die anderen --
+es sammelt dann wie zuvor ueber die naechsten Live-Zyklen auf. Zusammenfassung
+direkt im Log nach dem Start sichtbar ("Backfill abgeschlossen in ...").
+
 ## Strategie (Standardparameter)
 
 - **Trendfilter:** SMA 50 vs. SMA 200 (Golden Cross = Aufwaertstrend).

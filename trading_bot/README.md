@@ -82,7 +82,7 @@ direkt im Log nach dem Start sichtbar ("Backfill abgeschlossen in ...").
 - **Einstiegstrigger:** MACD(12,26,9)-Linie kreuzt die Signallinie von unten (bullisches Crossover) -- der Crossover selbst darf bis zu `MACD_CROSS_LOOKBACK_BARS` Bars (Standard: 5) zurueckliegen, muss also nicht exakt auf derselben Bar wie die SMA-Trendbestaetigung passieren, solange MACD seitdem nicht wieder unter die Signallinie gefallen ist.
 - **Bestaetigung:** RSI(14) zwischen 30 und 70 (kein ueberkaufter/ueberverkaufter Extremzustand).
 - **Einstieg (BUY):** nur wenn Trendfilter, (rueckblickender) Einstiegstrigger und RSI-Bestaetigung auf der aktuellen Bar gleichzeitig erfuellt sind, sonst HOLD.
-- **Ausstieg (SELL) einer offenen Position:** Death Cross, MACD-Bear-Crossover **oder** RSI ueberkauft (>= 70) — jede dieser Bedingungen allein reicht.
+- **Ausstieg (SELL) einer offenen Position:** Death Cross, MACD-Bear-Crossover, RSI ueberkauft (>= 70) -- mindestens `EXIT_CONFIRMATIONS_REQUIRED` davon (Standard: 2 von 3) muessen gleichzeitig zutreffen, sonst HOLD. Tradeoff: mit 1 (altes Verhalten) reicht jede Bedingung allein und schneidet laufende Aufwaertstrends oft zu frueh ab; mit 2 wird mehr vom Trend mitgenommen, waehrend der Schutz vor echten Abwaertstrends (mehrere Bedingungen treffen dort typischerweise gemeinsam zu) erhalten bleibt.
 - Der Bot handelt **long-only** (keine Leerverkaeufe).
 - Bei unvollstaendigen/uneindeutigen Signalen wird **keine** Order platziert (HOLD), das wird trotzdem geloggt.
 

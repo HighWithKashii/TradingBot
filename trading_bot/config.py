@@ -114,6 +114,17 @@ class Config:
     # ein Fenster von 1 (nur die aktuelle Bar) laesst dadurch die meisten
     # validen Einstiege durchrutschen. Nicht mode-aware.
     macd_cross_lookback_bars: int = field(default_factory=lambda: _get_int("MACD_CROSS_LOOKBACK_BARS", 5))
+    # Wie viele der drei Exit-Bedingungen (Death Cross, MACD-Bear-Crossover,
+    # RSI ueberkauft) gleichzeitig zutreffen muessen, bevor eine offene
+    # Position verkauft wird (siehe generate_signal(), has_open_position-
+    # Zweig). Default 2 statt 1: jede einzelne Bedingung allein kann laufende
+    # Aufwaertstrends zu frueh abwuergen (Trend-Erfassung), waehrend 2
+    # gleichzeitig weiterhin zuverlaessig vor echten Abwaertstrends schuetzt
+    # (Downside-Schutz) -- 1 entspricht exakt dem alten Verhalten. Nicht
+    # mode-aware.
+    exit_confirmations_required: int = field(
+        default_factory=lambda: _get_int("EXIT_CONFIRMATIONS_REQUIRED", 2)
+    )
 
     # Risk management (position size / SL / TP are mode-aware; the daily loss
     # limit is a hard cap that is deliberately identical in both modes --
@@ -186,6 +197,8 @@ class Config:
             raise ValueError("SMA_FAST must be smaller than SMA_SLOW.")
         if self.macd_cross_lookback_bars < 1:
             raise ValueError("MACD_CROSS_LOOKBACK_BARS must be at least 1.")
+        if not (1 <= self.exit_confirmations_required <= 3):
+            raise ValueError("EXIT_CONFIRMATIONS_REQUIRED must be between 1 and 3.")
         if not (0 < self.position_size_pct <= 100):
             raise ValueError("POSITION_SIZE_PCT must be between 0 and 100.")
         if not (0 < self.max_daily_loss_pct <= 100):

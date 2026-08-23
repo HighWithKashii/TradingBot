@@ -131,8 +131,15 @@ def generate_signal(df: pd.DataFrame, config: Config, has_open_position: bool) -
             reasons.append("MACD bearish crossover")
         if rsi_overbought:
             reasons.append(f"RSI overbought ({indicators['rsi']} >= {config.rsi_overbought})")
-        if reasons:
+        if len(reasons) >= config.exit_confirmations_required:
             return SignalResult(Action.SELL, "Exit signal: " + ", ".join(reasons) + ".", indicators)
+        if reasons:
+            return SignalResult(
+                Action.HOLD,
+                f"{len(reasons)}/{config.exit_confirmations_required} Exit-Bedingungen erfuellt "
+                f"({', '.join(reasons)}), noch keine Aktion.",
+                indicators,
+            )
         return SignalResult(Action.HOLD, "Position open, no exit condition met.", indicators)
 
     if uptrend and macd_bull_cross and rsi_ok_for_entry:

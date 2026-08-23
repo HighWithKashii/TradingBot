@@ -51,13 +51,23 @@ def parse_timeframe(value: str) -> TimeFrame:
     return TimeFrame(int(amount), _UNIT_MAP[unit.lower()])
 
 
-def estimate_backfill_start(timeframe: TimeFrame, bars_needed: int) -> datetime:
+def estimate_lookback_start(timeframe: TimeFrame, bars_needed: int) -> datetime:
     """Wie weit ein `start`-Datum zurueckliegen muss, damit trotz Wochenenden,
     Feiertagen und Handelspausen sicher `bars_needed` Bars der gegebenen
     Groesse zurueckkommen. Bewusst grosszuegig (Handelstage -> Kalendertage
     mit Wochenend-Faktor + fixem Feiertags-Puffer) -- ein paar Tage zu viel
     Historie anzufragen kostet nur etwas mehr Daten in der Antwort, zu wenig
-    wuerde den Backfill genau um das Problem bringen, das er loesen soll.
+    wuerde genau das Problem verursachen, das dieses `start`-Datum loesen soll.
+
+    Genutzt von get_bars(), get_bars_batch() UND backfill_bars(): alpaca-py
+    liefert bei einer reinen `limit`-only StockBarsRequest (ganz ohne
+    `start`) offenbar grundsaetzlich leere Ergebnisse zurueck -- auch mit
+    korrektem `feed` und gueltigen Keys. Ein explizites `start` behebt das,
+    unabhaengig vom (separaten) fehlenden-`feed`-Problem, das zuvor behoben
+    wurde. `end` wird bewusst NICHT gesetzt -- ohne `end` liefert die API bis
+    "jetzt", was fuer den Default-Feed "iex" unproblematisch ist (IEX ist
+    Realtime, keine 15-Minuten-Verzoegerung -- die betrifft laut Alpaca-Doku
+    nur den unbezahlten Zugriff auf den "sip"-Feed).
     """
     unit = timeframe.unit
     if unit == TimeFrameUnit.Minute:
@@ -90,6 +100,9 @@ class MarketDataFeed:
         request = StockBarsRequest(
             symbol_or_symbols=symbol,
             timeframe=self._timeframe,
+            # limit-only Requests (ganz ohne start) liefern bei alpaca-py
+            # leere Ergebnisse zurueck -- siehe estimate_lookback_start().
+            start=estimate_lookback_start(self._timeframe, limit),
             limit=limit,
             feed=self._config.alpaca_data_feed,
         )
@@ -114,11 +127,15 @@ class MarketDataFeed:
             symbols[i : i + self._config.data_batch_size]
             for i in range(0, len(symbols), self._config.data_batch_size)
         ]
+        start = estimate_lookback_start(self._timeframe, limit)
 
         for i, chunk in enumerate(chunks):
             request = StockBarsRequest(
                 symbol_or_symbols=chunk,
                 timeframe=self._timeframe,
+                # limit-only Requests (ganz ohne start) liefern bei alpaca-py
+                # leere Ergebnisse zurueck -- siehe estimate_lookback_start().
+                start=start,
                 # Alpaca's `limit` caps the total bar count across *all*
                 # symbols in the request, not per symbol -- scale it up so
                 # every symbol in the chunk still gets its full history.
@@ -158,14 +175,12 @@ class MarketDataFeed:
         Nutzt dieselbe Chunk-Strategie wie get_bars_batch (ein multi-symbol
         Request pro data_batch_size Symbole, Pause dazwischen -- haelt die
         Anzahl der HTTP-Requests bei z.B. 99 Nasdaq-100-Symbolen niedrig und
-        unter Alpacas Rate-Limits), setzt aber zusaetzlich explizit ein
-        `start`-Datum weit genug in der Vergangenheit (siehe
-        estimate_backfill_start) und retried jeden Chunk bis zu `retries`
-        mal, bevor die betroffenen Symbole als fehlgeschlagen geloggt werden
-        -- ein einzelner kurzzeitiger Ausfall der Alpaca API blockiert damit
-        nicht den Start der uebrigen Symbole.
+        unter Alpacas Rate-Limits), retried aber zusaetzlich jeden Chunk bis
+        zu `retries` mal, bevor die betroffenen Symbole als fehlgeschlagen
+        geloggt werden -- ein einzelner kurzzeitiger Ausfall der Alpaca API
+        blockiert damit nicht den Start der uebrigen Symbole.
         """
-        start = estimate_backfill_start(self._timeframe, limit)
+        start = estimate_lookback_start(self._timeframe, limit)
         results: dict[str, pd.DataFrame] = {}
         chunks = [
             symbols[i : i + self._config.data_batch_size]

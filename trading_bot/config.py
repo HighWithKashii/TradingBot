@@ -108,6 +108,12 @@ class Config:
     macd_fast: int = field(default_factory=lambda: _get_int("MACD_FAST", 12))
     macd_slow: int = field(default_factory=lambda: _get_int("MACD_SLOW", 26))
     macd_signal: int = field(default_factory=lambda: _get_int("MACD_SIGNAL", 9))
+    # Wie viele Bars zurueck ein MACD-Bullish-Crossover noch als gueltiger
+    # Entry-Trigger zaehlt (siehe strategy._macd_bull_cross_within) -- der
+    # Crossover passiert in der Praxis meist VOR der SMA-Trendbestaetigung,
+    # ein Fenster von 1 (nur die aktuelle Bar) laesst dadurch die meisten
+    # validen Einstiege durchrutschen. Nicht mode-aware.
+    macd_cross_lookback_bars: int = field(default_factory=lambda: _get_int("MACD_CROSS_LOOKBACK_BARS", 5))
 
     # Risk management (position size / SL / TP are mode-aware; the daily loss
     # limit is a hard cap that is deliberately identical in both modes --
@@ -178,6 +184,8 @@ class Config:
             raise ValueError("DATA_BATCH_SIZE must be at least 1.")
         if self.sma_fast >= self.sma_slow:
             raise ValueError("SMA_FAST must be smaller than SMA_SLOW.")
+        if self.macd_cross_lookback_bars < 1:
+            raise ValueError("MACD_CROSS_LOOKBACK_BARS must be at least 1.")
         if not (0 < self.position_size_pct <= 100):
             raise ValueError("POSITION_SIZE_PCT must be between 0 and 100.")
         if not (0 < self.max_daily_loss_pct <= 100):

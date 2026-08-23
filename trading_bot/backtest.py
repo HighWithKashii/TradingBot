@@ -63,6 +63,8 @@ class BacktestResult:
     trades: list[BacktestTrade] = field(default_factory=list)
     equity_curve: list[float] = field(default_factory=lambda: [0.0])
     starting_equity: float = 10_000.0
+    timeframe: str = ""
+    num_bars: int = 0
 
     @property
     def num_trades(self) -> int:
@@ -109,7 +111,10 @@ class BacktestResult:
 
     def summary(self, label: str = "") -> str:
         header = f"=== Backtest {label} ({self.symbol}) ===" if label else f"=== Backtest ({self.symbol}) ==="
-        lines = [header, f"Trades: {self.num_trades}"]
+        lines = [header]
+        if self.timeframe or self.num_bars:
+            lines.append(f"Timeframe: {self.timeframe or '?'} | Balken: {self.num_bars}")
+        lines.append(f"Trades: {self.num_trades}")
         if self.num_trades == 0:
             lines.append("Keine Trades ausgeloest (Signale zu selten/uneindeutig fuer den Testzeitraum).")
             return "\n".join(lines)
@@ -124,38 +129,82 @@ class BacktestResult:
         return "\n".join(lines)
 
 
+# yfinance-Intervall pro TIMEFRAME-Wert (siehe data_feed._TIMEFRAME_RE fuer
+# die unterstuetzten Werte: 1Min,5Min,15Min,30Min,1Hour,1Day).
+_YFINANCE_INTERVAL_MAP = {
+    "1min": "1m",
+    "5min": "5m",
+    "15min": "15m",
+    "30min": "30m",
+    "1hour": "60m",
+    "1day": "1d",
+}
+
+# Yahoo begrenzt Intraday-Historie hart (Stand 2025); 1d gilt praktisch als
+# unbegrenzt (None). Quelle: yfinance/Yahoo-Doku zu den `period`-Limits.
+_YFINANCE_MAX_LOOKBACK_DAYS = {
+    "1m": 7,
+    "5m": 60,
+    "15m": 60,
+    "30m": 60,
+    "60m": 730,
+    "1d": None,
+}
+
+
+def _timeframe_to_yfinance_interval(timeframe: str) -> str:
+    key = timeframe.strip().lower()
+    if key not in _YFINANCE_INTERVAL_MAP:
+        raise ValueError(
+            f"TIMEFRAME '{timeframe}' wird vom yfinance-Fallback nicht unterstuetzt "
+            f"(unterstuetzt: {', '.join(sorted(_YFINANCE_INTERVAL_MAP))})."
+        )
+    return _YFINANCE_INTERVAL_MAP[key]
+
+
 def load_historical_data(
     symbol: str,
     lookback_days: int = 730,
-    timeframe: str = "1Day",
     config: Config | None = None,
 ) -> pd.DataFrame:
     """Laedt historische OHLCV-Daten fuer den Backtest: primaer ueber Alpacas
     historische Markt-API (wenn `config` gueltige API-Keys enthaelt), sonst
     per yfinance-Fallback. Gibt ein aufsteigend sortiertes DataFrame mit
     'open','high','low','close','volume' zurueck.
+
+    Verwendet IMMER config.timeframe (Standard: die .env-Konfiguration, z.B.
+    "15Min") statt eines hart codierten Timeframes -- sonst testet der
+    Backtest eine andere Strategie als die, die der Live-Bot tatsaechlich
+    faehrt (z.B. Golden-Cross auf Tagesbasis statt der konfigurierten
+    Intraday-Strategie).
     """
+    timeframe = config.timeframe if config is not None else "1Day"
+
     if config is not None and config.api_key and config.secret_key:
         try:
             from trading_bot.data_feed import MarketDataFeed
 
-            backtest_config = replace(config, timeframe=timeframe)
-            feed = MarketDataFeed(backtest_config)
+            feed = MarketDataFeed(config)
             # grober Umrechnungsfaktor Kalendertage -> Balkenanzahl fuer
             # nicht-taegliche Timeframes (nur fuer den Anfrage-Limit noetig)
             limit = lookback_days if timeframe.lower().endswith("day") else lookback_days * 26
             bars = feed.get_bars(symbol, limit=limit)
             if not bars.empty:
-                logger.info("Historische Daten fuer %s von Alpaca geladen (%d Balken).", symbol, len(bars))
+                logger.info(
+                    "Historische Daten fuer %s von Alpaca geladen (%d Balken, Timeframe %s).",
+                    symbol,
+                    len(bars),
+                    timeframe,
+                )
                 return bars
             logger.warning("Alpaca lieferte keine Daten fuer %s, versuche yfinance...", symbol)
         except Exception as exc:
             logger.warning("Alpaca-Abruf fuer %s fehlgeschlagen (%s), versuche yfinance...", symbol, exc)
 
-    return _load_from_yfinance(symbol, lookback_days)
+    return _load_from_yfinance(symbol, lookback_days, timeframe)
 
 
-def _load_from_yfinance(symbol: str, lookback_days: int) -> pd.DataFrame:
+def _load_from_yfinance(symbol: str, lookback_days: int, timeframe: str = "1Day") -> pd.DataFrame:
     try:
         import yfinance as yf
     except ImportError as exc:
@@ -165,15 +214,30 @@ def _load_from_yfinance(symbol: str, lookback_days: int) -> pd.DataFrame:
             "oder hinterlege ALPACA_API_KEY/ALPACA_SECRET_KEY in .env."
         ) from exc
 
-    period = f"{max(lookback_days, 30)}d" if lookback_days <= 730 else "max"
-    raw = yf.download(symbol, period=period, interval="1d", progress=False, auto_adjust=True)
+    interval = _timeframe_to_yfinance_interval(timeframe)
+    max_days = _YFINANCE_MAX_LOOKBACK_DAYS.get(interval)
+    effective_days = lookback_days
+    if max_days is not None and lookback_days > max_days:
+        logger.warning(
+            "yfinance liefert fuer %s-Bars nur %d Tage Historie, kappe --days auf %d (angefragt: %d).",
+            interval,
+            max_days,
+            max_days,
+            lookback_days,
+        )
+        effective_days = max_days
+
+    period = "max" if max_days is None and effective_days > 730 else f"{max(effective_days, 30)}d"
+    raw = yf.download(symbol, period=period, interval=interval, progress=False, auto_adjust=True)
     if raw is None or raw.empty:
         raise RuntimeError(f"yfinance lieferte keine Daten fuer {symbol}.")
 
     raw = raw.rename(columns=str.lower)
     if isinstance(raw.columns, pd.MultiIndex):
         raw.columns = [str(c[0]).lower() for c in raw.columns]
-    logger.info("Historische Daten fuer %s von yfinance geladen (%d Balken).", symbol, len(raw))
+    logger.info(
+        "Historische Daten fuer %s von yfinance geladen (%d Balken, Timeframe %s).", symbol, len(raw), interval
+    )
     return raw[["open", "high", "low", "close", "volume"]].sort_index()
 
 
@@ -200,7 +264,9 @@ def run_backtest(df: pd.DataFrame, config: Config, symbol: str = "", starting_eq
     weiteren Balken zuerst auf Stop-Loss/Take-Profit (High/Low-Durchbruch)
     geprueft, danach auf ein SELL-Signal der Strategie.
     """
-    result = BacktestResult(symbol=symbol, starting_equity=starting_equity)
+    result = BacktestResult(
+        symbol=symbol, starting_equity=starting_equity, timeframe=config.timeframe, num_bars=len(df)
+    )
     risk_manager = RiskManager(config)
     position_fraction = config.position_size_pct / 100
 

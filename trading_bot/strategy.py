@@ -40,6 +40,33 @@ def _crossed_below(prev_a: float, prev_b: float, curr_a: float, curr_b: float) -
     return prev_a >= prev_b and curr_a < curr_b
 
 
+def _macd_bull_cross_within(df: pd.DataFrame, lookback_bars: int) -> tuple[bool, int | None]:
+    """Whether a bullish MACD crossover happened at any point within the
+    last `lookback_bars` bars (not just the current one), as long as the
+    MACD line is still above the signal line on the current bar (momentum
+    hasn't already reversed again since). The crossover itself typically
+    fires before the SMA trend filter confirms an uptrend -- requiring it on
+    the exact same bar as the trend filter lets most valid entries slip by.
+
+    Returns (found, bars_ago); bars_ago is 0 for the current bar, 1 for one
+    bar back, etc. (None when no crossover was found in the window).
+    """
+    latest = df.iloc[-1]
+    if not (latest["macd_line"] > latest["macd_signal_line"]):
+        return False, None
+
+    max_back = min(lookback_bars, len(df) - 1)
+    for bars_ago in range(max_back):
+        idx = len(df) - 1 - bars_ago
+        curr = df.iloc[idx]
+        prev = df.iloc[idx - 1]
+        if curr[["macd_line", "macd_signal_line"]].isna().any() or prev[["macd_line", "macd_signal_line"]].isna().any():
+            continue
+        if _crossed_above(prev["macd_line"], prev["macd_signal_line"], curr["macd_line"], curr["macd_signal_line"]):
+            return True, bars_ago
+    return False, None
+
+
 def compute_indicators(df: pd.DataFrame, config: Config) -> pd.DataFrame:
     """Adds SMA, EMA, RSI and MACD columns to a copy of the OHLCV dataframe."""
     out = df.copy()
@@ -89,9 +116,7 @@ def generate_signal(df: pd.DataFrame, config: Config, has_open_position: bool) -
 
     uptrend = latest["sma_fast"] > latest["sma_slow"]
     downtrend = latest["sma_fast"] < latest["sma_slow"]
-    macd_bull_cross = _crossed_above(
-        prev["macd_line"], prev["macd_signal_line"], latest["macd_line"], latest["macd_signal_line"]
-    )
+    macd_bull_cross, macd_bull_cross_bars_ago = _macd_bull_cross_within(df, config.macd_cross_lookback_bars)
     macd_bear_cross = _crossed_below(
         prev["macd_line"], prev["macd_signal_line"], latest["macd_line"], latest["macd_signal_line"]
     )
@@ -111,10 +136,11 @@ def generate_signal(df: pd.DataFrame, config: Config, has_open_position: bool) -
         return SignalResult(Action.HOLD, "Position open, no exit condition met.", indicators)
 
     if uptrend and macd_bull_cross and rsi_ok_for_entry:
+        cross_timing = "this bar" if macd_bull_cross_bars_ago == 0 else f"{macd_bull_cross_bars_ago} bar(s) ago"
         reason = (
             f"Uptrend (SMA{config.sma_fast} {indicators['sma_fast']} > "
             f"SMA{config.sma_slow} {indicators['sma_slow']}), MACD bullish crossover "
-            f"({indicators['macd_line']} > {indicators['macd_signal_line']}), "
+            f"{cross_timing} ({indicators['macd_line']} > {indicators['macd_signal_line']}), "
             f"RSI confirms momentum without being overbought ({indicators['rsi']})."
         )
         return SignalResult(Action.BUY, reason, indicators)
@@ -123,7 +149,7 @@ def generate_signal(df: pd.DataFrame, config: Config, has_open_position: bool) -
     if not uptrend:
         missing.append("no confirmed uptrend")
     if not macd_bull_cross:
-        missing.append("no MACD bullish crossover this bar")
+        missing.append(f"no MACD bullish crossover within the last {config.macd_cross_lookback_bars} bar(s)")
     if not rsi_ok_for_entry:
         missing.append(f"RSI outside entry range ({indicators['rsi']})")
     return SignalResult(Action.HOLD, "No entry: " + ", ".join(missing) + ".", indicators)

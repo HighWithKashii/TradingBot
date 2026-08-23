@@ -79,9 +79,9 @@ direkt im Log nach dem Start sichtbar ("Backfill abgeschlossen in ...").
 ## Strategie (Standardparameter)
 
 - **Trendfilter:** SMA 50 vs. SMA 200 (Golden Cross = Aufwaertstrend).
-- **Einstiegstrigger:** MACD(12,26,9)-Linie kreuzt die Signallinie von unten (bullisches Crossover).
+- **Einstiegstrigger:** MACD(12,26,9)-Linie kreuzt die Signallinie von unten (bullisches Crossover) -- der Crossover selbst darf bis zu `MACD_CROSS_LOOKBACK_BARS` Bars (Standard: 5) zurueckliegen, muss also nicht exakt auf derselben Bar wie die SMA-Trendbestaetigung passieren, solange MACD seitdem nicht wieder unter die Signallinie gefallen ist.
 - **Bestaetigung:** RSI(14) zwischen 30 und 70 (kein ueberkaufter/ueberverkaufter Extremzustand).
-- **Einstieg (BUY):** nur wenn alle drei Bedingungen gleichzeitig erfuellt sind, sonst HOLD.
+- **Einstieg (BUY):** nur wenn Trendfilter, (rueckblickender) Einstiegstrigger und RSI-Bestaetigung auf der aktuellen Bar gleichzeitig erfuellt sind, sonst HOLD.
 - **Ausstieg (SELL) einer offenen Position:** Death Cross, MACD-Bear-Crossover **oder** RSI ueberkauft (>= 70) — jede dieser Bedingungen allein reicht.
 - Der Bot handelt **long-only** (keine Leerverkaeufe).
 - Bei unvollstaendigen/uneindeutigen Signalen wird **keine** Order platziert (HOLD), das wird trotzdem geloggt.
@@ -281,8 +281,14 @@ python -m trading_bot.backtest --symbol AAPL --days 730
   das Pattern-Modul) -- long-only, eine Position gleichzeitig, Stop-Loss/
   Take-Profit exakt wie die Live-Bracket-Order (`STOP_LOSS_PCT`/`TAKE_PROFIT_PCT`),
   Positionsgroesse gemaess `POSITION_SIZE_PCT` (kein 100 %-des-Kapitals-Fantasieergebnis).
-- **Output:** Trefferquote, durchschnittlicher Gewinn/Verlust pro Trade,
-  Anzahl Trades, Gesamtrendite, Max Drawdown.
+- **Timeframe:** verwendet immer `config.timeframe` (also die aktuelle
+  `.env`/`TRADING_MODE`-Konfiguration, z.B. `15Min`) -- **nicht** hart
+  codiert auf Tageskerzen. Der yfinance-Fallback mappt das auf das passende
+  Yahoo-Intervall (`15Min`->`15m` usw.) und kappt `--days` automatisch auf
+  Yahoo's Intraday-Limits (1m ~7 Tage, 5/15/30m ~60 Tage, 60m ~730 Tage,
+  1d unbegrenzt), mit einer klaren Log-Zeile, falls gekappt wurde.
+- **Output:** Timeframe + Balkenanzahl, Trefferquote, durchschnittlicher
+  Gewinn/Verlust pro Trade, Anzahl Trades, Gesamtrendite, Max Drawdown.
 - Ohne `--no-compare` (Standard) laeuft der Backtest automatisch **zweimal**
   -- einmal ohne, einmal mit Pattern-Modul -- und druckt beide Reports
   direkt untereinander zum Vergleich.

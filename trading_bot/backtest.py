@@ -65,6 +65,8 @@ class BacktestResult:
     starting_equity: float = 10_000.0
     timeframe: str = ""
     num_bars: int = 0
+    buy_hold_return_pct: float = 0.0
+    position_size_pct: float = 0.0
 
     @property
     def num_trades(self) -> int:
@@ -109,6 +111,16 @@ class BacktestResult:
                 max_dd = max(max_dd, (peak - eq) / peak * 100)
         return max_dd
 
+    def _buy_hold_lines(self) -> list[str]:
+        return [
+            f"Buy & Hold (Kaufen und Halten, 100% Kapital): {self.buy_hold_return_pct:+.2f}%",
+            f"Strategie vs. Buy & Hold: {self.total_return_pct - self.buy_hold_return_pct:+.2f} Prozentpunkte",
+            f"Hinweis: Die Strategie setzt pro Trade nur {self.position_size_pct:.1f}% des Kapitals ein "
+            "(Rest liegt bar), Buy & Hold nutzt 100%. Der Vergleich zeigt daher primaer ob die "
+            "Entry/Exit-Logik ueberhaupt in die richtige Richtung tradet, ist aber kein direkter "
+            "Rendite-Vergleich bei gleichem Kapitaleinsatz.",
+        ]
+
     def summary(self, label: str = "") -> str:
         header = f"=== Backtest {label} ({self.symbol}) ===" if label else f"=== Backtest ({self.symbol}) ==="
         lines = [header]
@@ -117,6 +129,7 @@ class BacktestResult:
         lines.append(f"Trades: {self.num_trades}")
         if self.num_trades == 0:
             lines.append("Keine Trades ausgeloest (Signale zu selten/uneindeutig fuer den Testzeitraum).")
+            lines.extend(self._buy_hold_lines())
             return "\n".join(lines)
         lines.append(f"Trefferquote: {self.win_rate:.1f}%")
         lines.append(f"Avg. Gewinn: {self.avg_win_pct:+.2f}%  |  Avg. Verlust: {self.avg_loss_pct:+.2f}%")
@@ -126,6 +139,7 @@ class BacktestResult:
             f"(Start {self.starting_equity:.2f} -> Ende {self.equity_curve[-1]:.2f})"
         )
         lines.append(f"Max Drawdown: {self.max_drawdown_pct:.2f}%")
+        lines.extend(self._buy_hold_lines())
         return "\n".join(lines)
 
 
@@ -264,8 +278,17 @@ def run_backtest(df: pd.DataFrame, config: Config, symbol: str = "", starting_eq
     weiteren Balken zuerst auf Stop-Loss/Take-Profit (High/Low-Durchbruch)
     geprueft, danach auf ein SELL-Signal der Strategie.
     """
+    buy_hold_return_pct = 0.0
+    if len(df) > 0 and float(df["close"].iloc[0]) > 0:
+        buy_hold_return_pct = (float(df["close"].iloc[-1]) / float(df["close"].iloc[0]) - 1) * 100
+
     result = BacktestResult(
-        symbol=symbol, starting_equity=starting_equity, timeframe=config.timeframe, num_bars=len(df)
+        symbol=symbol,
+        starting_equity=starting_equity,
+        timeframe=config.timeframe,
+        num_bars=len(df),
+        buy_hold_return_pct=buy_hold_return_pct,
+        position_size_pct=config.position_size_pct,
     )
     risk_manager = RiskManager(config)
     position_fraction = config.position_size_pct / 100

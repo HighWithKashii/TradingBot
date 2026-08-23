@@ -3,10 +3,14 @@ and the trading clock used to check whether the market is open.
 
 Bars for multi-symbol watchlists (e.g. the full Nasdaq-100) are fetched in
 chunks via get_bars_batch() rather than one HTTP request per symbol, to stay
-well under Alpaca's data API rate limits. Note that Alpaca's `limit`
-parameter on the multi-symbol bars endpoint caps the *total* number of bars
-across all symbols in the request (not per symbol), so the requested limit
-is scaled up by the batch size and trimmed back down per symbol afterwards.
+well under Alpaca's data API rate limits. Multi-symbol requests deliberately
+omit `limit` -- alpaca-py's own pagination (RESTClient._get_marketdata) sums
+returned bars *across all symbols in the chunk* against a single shared
+`limit` budget, so once that budget is used up, whichever symbols happen to
+be processed last in that response can come back completely empty, no
+matter how generously `limit` is scaled up. Bounding the request via `start`
+instead (see estimate_lookback_start) and trimming each symbol's result down
+to the desired bar count afterwards avoids this entirely.
 """
 
 from __future__ import annotations
@@ -136,10 +140,18 @@ class MarketDataFeed:
                 # limit-only Requests (ganz ohne start) liefern bei alpaca-py
                 # leere Ergebnisse zurueck -- siehe estimate_lookback_start().
                 start=start,
-                # Alpaca's `limit` caps the total bar count across *all*
-                # symbols in the request, not per symbol -- scale it up so
-                # every symbol in the chunk still gets its full history.
-                limit=limit * len(chunk),
+                # Bewusst OHNE limit=: alpaca-py's Pagination (siehe
+                # RESTClient._get_marketdata) zaehlt total_items als Summe
+                # UEBER ALLE Symbole im Chunk zusammen und bricht ab, sobald
+                # diese Summe `limit` erreicht -- selbst limit*len(chunk)
+                # verhindert das nicht zuverlaessig, weil die Bars nicht
+                # gleichmaessig auf die Symbole verteilt zurueckkommen (das
+                # zuletzt verarbeitete Symbol im Chunk kann dabei komplett
+                # leer ausgehen). Ohne limit paginiert der Client stattdessen
+                # einfach so lange (in 10.000er-Seiten), bis Alpaca fuer den
+                # kompletten Chunk kein next_page_token mehr liefert -- die
+                # Datenmenge bleibt trotzdem durch das eng bemessene `start`
+                # begrenzt, danach wird unten pro Symbol auf `limit` getrimmt.
                 feed=self._config.alpaca_data_feed,
             )
             try:
@@ -192,9 +204,12 @@ class MarketDataFeed:
                 symbol_or_symbols=chunk,
                 timeframe=self._timeframe,
                 start=start,
-                # Gleiche Ueberlegung wie in get_bars_batch: `limit` deckelt
-                # die Gesamtanzahl Bars *ueber alle Symbole* im Request.
-                limit=limit * len(chunk),
+                # Bewusst OHNE limit= -- siehe ausfuehrlicher Kommentar in
+                # get_bars_batch(): ein gemeinsames limit ueber den ganzen
+                # Chunk (auch limit*len(chunk)) laesst zuletzt verarbeitete
+                # Symbole leer ausgehen, weil alpaca-py Bars ueber alle
+                # Symbole hinweg gegen dasselbe Budget zaehlt. `start` allein
+                # begrenzt die Datenmenge ausreichend.
                 feed=self._config.alpaca_data_feed,
             )
 

@@ -48,6 +48,13 @@ sorgt dafuer, dass ausschliesslich der Paper-Endpunkt
 (`paper-api.alpaca.markets`) verwendet wird. Keys stehen ausschliesslich in
 `.env` (nicht eingecheckt, siehe `.gitignore`) — niemals im Code.
 
+`ALPACA_DATA_FEED=iex` (Default) legt fest, welcher Markt-Daten-Feed fuer
+historische Bars angefragt wird. Kostenlose/Paper-Accounts haben nur Zugriff
+auf `iex` -- ohne dieses explizite `feed=` in der Anfrage faellt Alpaca still
+auf `sip` (Consolidated Feed) zurueck und liefert dann **leere Ergebnisse
+ohne Fehlermeldung**, wenn der Account dafuer nicht freigeschaltet ist. Nur
+mit einem bezahlten Markt-Daten-Abo auf `sip` umstellen.
+
 ## Start
 
 ```bash

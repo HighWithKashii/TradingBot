@@ -72,6 +72,13 @@ class Config:
     api_key: str = field(default_factory=lambda: os.getenv("ALPACA_API_KEY", ""))
     secret_key: str = field(default_factory=lambda: os.getenv("ALPACA_SECRET_KEY", ""))
     paper: bool = field(default_factory=lambda: _get_bool("ALPACA_PAPER", True))
+    # Welcher Markt-Daten-Feed fuer historische Bars genutzt wird. "iex" ist
+    # der Default, weil kostenlose/Paper-Accounts keinen Zugriff auf "sip"
+    # (Consolidated Feed) haben -- eine StockBarsRequest ohne explizites
+    # feed= faellt sonst still auf "sip" zurueck und liefert dann leere
+    # Ergebnisse OHNE Fehler, statt eine verstaendliche Exception zu werfen.
+    # Bei einem bezahlten Account mit SIP-Zugang hier auf "sip" umstellen.
+    alpaca_data_feed: str = field(default_factory=lambda: os.getenv("ALPACA_DATA_FEED", "iex").strip().lower())
 
     # Watchlist / timing
     watchlist_env: list[str] = field(default_factory=lambda: _get_list("WATCHLIST", ["AAPL"]))
@@ -161,6 +168,10 @@ class Config:
             )
         if self.trading_mode not in ("standard", "fast"):
             raise ValueError(f"TRADING_MODE must be 'standard' or 'fast', got '{self.trading_mode}'.")
+        if self.alpaca_data_feed not in ("iex", "sip", "delayed_sip", "otc"):
+            raise ValueError(
+                f"ALPACA_DATA_FEED must be one of 'iex', 'sip', 'delayed_sip', 'otc', got '{self.alpaca_data_feed}'."
+            )
         if not self.watchlist:
             raise ValueError("WATCHLIST must contain at least one symbol (or set USE_NASDAQ100=true).")
         if self.data_batch_size < 1:

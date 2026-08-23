@@ -91,6 +91,7 @@ class MarketDataFeed:
             symbol_or_symbols=symbol,
             timeframe=self._timeframe,
             limit=limit,
+            feed=self._config.alpaca_data_feed,
         )
         bar_set = self._data_client.get_stock_bars(request)
         df = bar_set.df
@@ -122,6 +123,7 @@ class MarketDataFeed:
                 # symbols in the request, not per symbol -- scale it up so
                 # every symbol in the chunk still gets its full history.
                 limit=limit * len(chunk),
+                feed=self._config.alpaca_data_feed,
             )
             try:
                 bar_set = self._data_client.get_stock_bars(request)
@@ -178,6 +180,7 @@ class MarketDataFeed:
                 # Gleiche Ueberlegung wie in get_bars_batch: `limit` deckelt
                 # die Gesamtanzahl Bars *ueber alle Symbole* im Request.
                 limit=limit * len(chunk),
+                feed=self._config.alpaca_data_feed,
             )
 
             bar_set = None

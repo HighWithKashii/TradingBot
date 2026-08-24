@@ -18,23 +18,31 @@ das Ergebnis nicht vergleichbar mit dem tatsaechlichen Risiko im Live-Bot).
 Bewusste Vereinfachung: das Tagesverlust-Limit (MAX_DAILY_LOSS_PCT) wird im
 Backtest NICHT simuliert (nur SL/TP + Signal-Exit), siehe README.
 
-Performance-Hinweis: pro Balken wird compute_indicators() auf dem bis dahin
-sichtbaren Fenster neu berechnet (kein inkrementelles Update) -- das ist
-fuer die ueblichen Backtest-Groessen (taegliche Bars ueber 1-3 Jahre) schnell
-genug, skaliert aber nicht auf sehr lange Intraday-Historien.
+Performance: compute_indicators() laeuft einmal vorab auf dem kompletten df
+(SMA/EMA/RSI/MACD sind rein kausale rolling/ewm-Berechnungen, siehe
+indicators.py -- der Wert an Position i haengt nie von Werten > i ab), statt
+pro Balken auf einem wachsenden Fenster neu gerechnet zu werden. Die
+Backtest-Schleife selbst greift pro Balken nur noch auf einen View
+(enriched.iloc[:i+1]) dieses einmal berechneten DataFrames zu.
 
-CLI-Nutzung:  python -m trading_bot.backtest --symbol AAPL --days 730
+CLI-Nutzung:
+    python -m trading_bot.backtest --symbol AAPL --days 730
+    python -m trading_bot.backtest --use-nasdaq100 --days 730 --no-compare
 """
 
 from __future__ import annotations
 
 import argparse
+import csv
 import logging
+import statistics
+import time
 from dataclasses import dataclass, field, replace
 
 import pandas as pd
 
 from trading_bot.config import Config, load_config
+from trading_bot.nasdaq100 import NASDAQ_100
 from trading_bot.risk_manager import RiskManager
 from trading_bot.strategy import (
     Action,
@@ -255,13 +263,18 @@ def _load_from_yfinance(symbol: str, lookback_days: int, timeframe: str = "1Day"
     return raw[["open", "high", "low", "close", "volume"]].sort_index()
 
 
-def _combined_signal(window: pd.DataFrame, config: Config, has_open_position: bool):
+def _combined_signal(window: pd.DataFrame, enriched_window: pd.DataFrame, config: Config, has_open_position: bool):
     """Ruft dieselben Entscheidungsfunktionen wie bot.py auf -- Backtest und
     Live-Bot teilen sich diesen Code, damit sich die Logik nicht auseinander
     entwickeln kann.
+
+    `enriched_window` ist bereits indikator-angereichert (siehe run_backtest:
+    compute_indicators() laeuft dort einmal vorab auf dem kompletten df,
+    nicht mehr pro Balken) -- `window` bleibt die rohen OHLCV-Bars, exakt
+    wie zuvor, fuers Pattern-Modul (das seine eigene, unabhaengige Pivot-/
+    Trendlinien-Erkennung auf rohen Kursen braucht, nicht auf SMA/RSI/MACD).
     """
-    enriched = compute_indicators(window, config)
-    signal = generate_signal(enriched, config, has_open_position=has_open_position)
+    signal = generate_signal(enriched_window, config, has_open_position=has_open_position)
     if config.pattern_enabled:
         pattern_signal = generate_pattern_signal_from_config(window, config)
         signal = combine_with_pattern_signal(signal, pattern_signal, config)
@@ -311,8 +324,17 @@ def run_backtest(df: pd.DataFrame, config: Config, symbol: str = "", starting_eq
         result.equity_curve = equity_curve
         return result
 
+    # SMA/EMA/RSI/MACD sind rein kausale rolling/ewm-Berechnungen (siehe
+    # indicators.py) -- der Wert an Position i haengt nie von Werten > i ab.
+    # Deshalb reicht es, hier einmal auf dem kompletten df zu rechnen, statt
+    # compute_indicators() pro Balken auf einem wachsenden Fenster neu
+    # aufzurufen (O(n) statt O(n^2) -- bei ~19.000 15Min-Balken pro Symbol
+    # sonst mehrere Minuten allein pro Symbol).
+    enriched = compute_indicators(df, config)
+
     for i in range(min_bars, len(df)):
         window = df.iloc[: i + 1]
+        enriched_window = enriched.iloc[: i + 1]
         bar = df.iloc[i]
 
         if in_position:
@@ -323,7 +345,7 @@ def run_backtest(df: pd.DataFrame, config: Config, symbol: str = "", starting_eq
             elif bar["high"] >= take_price:
                 exit_price, exit_reason = take_price, "Take-Profit"
             else:
-                signal = _combined_signal(window, config, has_open_position=True)
+                signal = _combined_signal(window, enriched_window, config, has_open_position=True)
                 if signal.action == Action.SELL:
                     exit_price, exit_reason = float(bar["close"]), "Signal"
 
@@ -344,7 +366,7 @@ def run_backtest(df: pd.DataFrame, config: Config, symbol: str = "", starting_eq
                 in_position = False
 
         else:
-            signal = _combined_signal(window, config, has_open_position=False)
+            signal = _combined_signal(window, enriched_window, config, has_open_position=False)
             if signal.action == Action.BUY:
                 entry_price = float(bar["close"])
                 entry_index = i
@@ -354,6 +376,138 @@ def run_backtest(df: pd.DataFrame, config: Config, symbol: str = "", starting_eq
 
     result.equity_curve = equity_curve
     return result
+
+
+def _load_and_run_one(
+    symbol: str, config: Config, lookback_days: int, starting_equity: float
+) -> BacktestResult | None:
+    """Laedt Daten + backtest fuer ein Symbol; gibt None zurueck (statt zu
+    werfen) wenn irgendetwas schiefgeht -- fehlende Daten, Rate-Limit,
+    Alpaca/yfinance-Fehler etc. sollen im Nasdaq-100-Batch nicht den
+    gesamten Lauf abbrechen, sondern nur dieses eine Symbol ueberspringen.
+    """
+    try:
+        df = load_historical_data(symbol, lookback_days=lookback_days, config=config)
+        return run_backtest(df, config, symbol=symbol, starting_equity=starting_equity)
+    except Exception as exc:
+        logger.warning("Backtest fuer %s uebersprungen (%s).", symbol, exc)
+        return None
+
+
+def _summarize_nasdaq100_results(results: list[BacktestResult], total_symbols: int) -> str:
+    """Baut die Aggregat-Zusammenfassung ueber alle erfolgreich getesteten
+    Symbole -- reine Formatierungs-/Statistiklogik, unabhaengig vom
+    tatsaechlichen Datenabruf (dadurch mit synthetischen Ergebnissen testbar).
+    """
+    lines = [
+        "=== Nasdaq-100 Backtest: Zusammenfassung ===",
+        f"Erfolgreich getestet: {len(results)}/{total_symbols}",
+    ]
+    if not results:
+        lines.append("Keine Symbole erfolgreich getestet -- keine Statistik moeglich.")
+        return "\n".join(lines)
+
+    win_rates = [r.win_rate for r in results]
+    total_returns = [r.total_return_pct for r in results]
+    buy_holds = [r.buy_hold_return_pct for r in results]
+    diffs = [r.total_return_pct - r.buy_hold_return_pct for r in results]
+
+    lines.append("")
+    lines.append(f"{'':22}{'Median':>10}{'Durchschnitt':>15}")
+    lines.append(f"{'Trefferquote':22}{statistics.median(win_rates):>9.1f}%{statistics.mean(win_rates):>14.1f}%")
+    lines.append(
+        f"{'Gesamtrendite (Strategie)':22}{statistics.median(total_returns):>9.2f}%{statistics.mean(total_returns):>14.2f}%"
+    )
+    lines.append(
+        f"{'Buy & Hold Rendite':22}{statistics.median(buy_holds):>9.2f}%{statistics.mean(buy_holds):>14.2f}%"
+    )
+    lines.append(
+        f"{'Differenz vs. Buy&Hold':22}{statistics.median(diffs):>8.2f}pp{statistics.mean(diffs):>13.2f}pp"
+    )
+
+    uptrend = [r for r in results if r.buy_hold_return_pct > 0]
+    downtrend = [r for r in results if r.buy_hold_return_pct < 0]
+    lines.append("")
+    lines.append("-- Aufgeteilt nach Marktregime (Buy & Hold Rendite im Zeitraum) --")
+    if uptrend:
+        avg_diff_up = statistics.mean(r.total_return_pct - r.buy_hold_return_pct for r in uptrend)
+        lines.append(
+            f"Aufwaertstrend (Buy&Hold > 0%, {len(uptrend)} Symbole): "
+            f"durchschnittliche Differenz zu Buy&Hold: {avg_diff_up:+.2f} Prozentpunkte"
+        )
+    else:
+        lines.append("Aufwaertstrend (Buy&Hold > 0%): keine Symbole in dieser Gruppe.")
+    if downtrend:
+        avg_diff_down = statistics.mean(r.total_return_pct - r.buy_hold_return_pct for r in downtrend)
+        lines.append(
+            f"Abwaertstrend (Buy&Hold < 0%, {len(downtrend)} Symbole): "
+            f"durchschnittliche Differenz zu Buy&Hold: {avg_diff_down:+.2f} Prozentpunkte"
+        )
+    else:
+        lines.append("Abwaertstrend (Buy&Hold < 0%): keine Symbole in dieser Gruppe.")
+
+    ranked = sorted(results, key=lambda r: r.total_return_pct - r.buy_hold_return_pct, reverse=True)
+    lines.append("")
+    lines.append("-- Top 5 (beste Differenz zu Buy & Hold) --")
+    for r in ranked[:5]:
+        lines.append(
+            f"  {r.symbol:6} Strategie {r.total_return_pct:+7.2f}%  Buy&Hold {r.buy_hold_return_pct:+7.2f}%  "
+            f"Differenz {r.total_return_pct - r.buy_hold_return_pct:+7.2f}pp  ({r.num_trades} Trades)"
+        )
+    lines.append("-- Flop 5 (schlechteste Differenz zu Buy & Hold) --")
+    for r in ranked[-5:][::-1]:
+        lines.append(
+            f"  {r.symbol:6} Strategie {r.total_return_pct:+7.2f}%  Buy&Hold {r.buy_hold_return_pct:+7.2f}%  "
+            f"Differenz {r.total_return_pct - r.buy_hold_return_pct:+7.2f}pp  ({r.num_trades} Trades)"
+        )
+    return "\n".join(lines)
+
+
+def _write_nasdaq100_csv(results: list[BacktestResult], path: str) -> None:
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(["Symbol", "Trades", "Trefferquote", "Gesamtrendite", "BuyHoldRendite", "Differenz"])
+        for r in results:
+            writer.writerow(
+                [
+                    r.symbol,
+                    r.num_trades,
+                    round(r.win_rate, 2),
+                    round(r.total_return_pct, 2),
+                    round(r.buy_hold_return_pct, 2),
+                    round(r.total_return_pct - r.buy_hold_return_pct, 2),
+                ]
+            )
+
+
+def run_nasdaq100_backtest(
+    config: Config,
+    lookback_days: int,
+    starting_equity: float,
+    pause_seconds: float = 0.5,
+    csv_path: str = "nasdaq100_backtest_results.csv",
+) -> None:
+    """Backtest ueber die komplette Nasdaq-100-Watchlist (siehe nasdaq100.py)
+    statt eines einzelnen Symbols -- prueft, ob das an AAPL/MSFT/NVDA
+    beobachtete Muster (Strategie schuetzt gut vor Abwaertstrends, verpasst
+    aber Teile von Aufwaertstrends) sich ueber eine groessere Stichprobe
+    bestaetigt. Ein einzelnes fehlschlagendes Symbol (fehlende Daten,
+    Rate-Limit, ...) bricht den Lauf nicht ab, siehe _load_and_run_one().
+    """
+    total = len(NASDAQ_100)
+    results: list[BacktestResult] = []
+    for i, symbol in enumerate(NASDAQ_100, start=1):
+        result = _load_and_run_one(symbol, config, lookback_days, starting_equity)
+        if result is not None:
+            results.append(result)
+        logger.info("Fortschritt: %d/%d Symbole verarbeitet, %d/%d erfolgreich getestet.", i, total, len(results), total)
+        if i < total and pause_seconds > 0:
+            time.sleep(pause_seconds)
+
+    print(_summarize_nasdaq100_results(results, total_symbols=total))
+    if results:
+        _write_nasdaq100_csv(results, csv_path)
+        print(f"\nErgebnis pro Symbol gespeichert unter: {csv_path}")
 
 
 def _build_cli_config(pattern_enabled: bool) -> Config:
@@ -374,6 +528,13 @@ def main() -> None:
         description="Backtest der Trading-Strategie, optional mit Pattern-Modul (Trendlinien/Muster)."
     )
     parser.add_argument("--symbol", default="AAPL", help="Zu testendes Symbol (Standard: AAPL)")
+    parser.add_argument(
+        "--use-nasdaq100",
+        action="store_true",
+        help="Backtest ueber die komplette Nasdaq-100-Watchlist statt eines einzelnen --symbol "
+        "(schreibt zusaetzlich nasdaq100_backtest_results.csv). Laeuft immer mit der aktuellen "
+        ".env-Konfiguration (wie --no-compare), --symbol wird dabei ignoriert.",
+    )
     parser.add_argument("--days", type=int, default=730, help="Lookback in Kalendertagen (Standard: 730)")
     parser.add_argument(
         "--starting-equity", type=float, default=10_000.0, help="Simuliertes Startkapital (Standard: 10000)"
@@ -384,6 +545,14 @@ def main() -> None:
         help="Nur mit der aktuellen .env-Konfiguration testen statt automatisch mit/ohne Pattern-Modul zu vergleichen.",
     )
     args = parser.parse_args()
+
+    if args.use_nasdaq100:
+        try:
+            config = load_config()
+        except ValueError:
+            config = Config()
+        run_nasdaq100_backtest(config, lookback_days=args.days, starting_equity=args.starting_equity)
+        return
 
     try:
         if args.no_compare:

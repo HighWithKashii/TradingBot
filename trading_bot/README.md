@@ -288,16 +288,32 @@ python -m trading_bot.backtest --symbol AAPL --days 730
   Yahoo's Intraday-Limits (1m ~7 Tage, 5/15/30m ~60 Tage, 60m ~730 Tage,
   1d unbegrenzt), mit einer klaren Log-Zeile, falls gekappt wurde.
 - **Output:** Timeframe + Balkenanzahl, Trefferquote, durchschnittlicher
-  Gewinn/Verlust pro Trade, Anzahl Trades, Gesamtrendite, Max Drawdown.
+  Gewinn/Verlust pro Trade, Anzahl Trades, Gesamtrendite, Max Drawdown, sowie
+  ein **Buy-&-Hold-Vergleich** (Kaufen und Halten mit 100 % Kapital ueber
+  denselben Zeitraum) inkl. Differenz in Prozentpunkten -- zeigt, ob die
+  Entry/Exit-Logik ueberhaupt in die richtige Richtung tradet. Kein direkter
+  Rendite-Vergleich bei gleichem Kapitaleinsatz, da die Strategie nur
+  `POSITION_SIZE_PCT` einsetzt, Buy & Hold aber 100 %.
 - Ohne `--no-compare` (Standard) laeuft der Backtest automatisch **zweimal**
   -- einmal ohne, einmal mit Pattern-Modul -- und druckt beide Reports
   direkt untereinander zum Vergleich.
+- **Nasdaq-100-Batch:** `--use-nasdaq100` testet die komplette Watchlist aus
+  `nasdaq100.py` statt eines einzelnen `--symbol` (laeuft dabei immer mit der
+  aktuellen `.env`-Konfiguration, wie `--no-compare`). Ein einzelnes
+  fehlschlagendes Symbol (fehlende Daten, Rate-Limit) bricht den Lauf nicht
+  ab, sondern wird uebersprungen und geloggt. Am Ende: Median/Durchschnitt
+  ueber alle erfolgreich getesteten Symbole, aufgeteilt nach Marktregime
+  (Buy&Hold-Rendite positiv vs. negativ im Zeitraum) sowie Top-5/Flop-5 nach
+  Differenz zu Buy & Hold -- damit laesst sich pruefen, ob ein an
+  Einzeltiteln beobachtetes Muster (z.B. "schuetzt gut vor Abwaertstrends,
+  verpasst Teile von Aufwaertstrends") sich ueber die ganze Liste bestaetigt.
+  Ergebnis pro Symbol zusaetzlich als `nasdaq100_backtest_results.csv`.
+  ```bash
+  python -m trading_bot.backtest --use-nasdaq100 --days 730 --no-compare
+  ```
 - **Bekannte Vereinfachung:** das Tagesverlust-Limit (`MAX_DAILY_LOSS_PCT`)
   wird im Backtest nicht simuliert, nur Stop-Loss/Take-Profit und die
-  Signal-Exit-Logik. Der Backtest arbeitet zudem pro Balken mit einer
-  Neuberechnung der Indikatoren auf dem bis dahin sichtbaren Fenster (keine
-  inkrementelle Aktualisierung) -- fuer taegliche Bars ueber mehrere Jahre
-  performant genug, fuer sehr lange Intraday-Historien nicht ausgelegt.
+  Signal-Exit-Logik.
 
 ## Mobile-Dashboard
 

@@ -18,9 +18,15 @@ from dataclasses import dataclass
 
 from alpaca.common.exceptions import APIError
 from alpaca.trading.client import TradingClient
-from alpaca.trading.enums import OrderClass, OrderSide, QueryOrderStatus, TimeInForce
+from alpaca.trading.enums import OrderClass, OrderSide, OrderType, QueryOrderStatus, TimeInForce
 from alpaca.trading.models import Order, Position, TradeAccount
-from alpaca.trading.requests import GetOrdersRequest, MarketOrderRequest, StopLossRequest, TakeProfitRequest
+from alpaca.trading.requests import (
+    GetOrdersRequest,
+    MarketOrderRequest,
+    StopLossRequest,
+    StopOrderRequest,
+    TakeProfitRequest,
+)
 
 from trading_bot.config import Config
 from trading_bot.risk_manager import BracketPrices
@@ -33,6 +39,8 @@ class OrderExecutionError(Exception):
 
 
 class OrderExecutor:
+    _STOP_ORDER_TYPES = (OrderType.STOP, OrderType.STOP_LIMIT, OrderType.TRAILING_STOP)
+
     def __init__(
         self,
         config: Config,
@@ -77,11 +85,25 @@ class OrderExecutor:
         return {position.symbol: position for position in positions}
 
     def submit_bracket_buy(self, symbol: str, qty: int, prices: BracketPrices) -> Order:
+        # GTC, nicht DAY: mit DAY liefe die Take-Profit-Limit-Order zum
+        # Handelsschluss ab, sobald sie nicht gefuellt wurde -- und weil
+        # TP/SL als One-Cancels-Other verknuepft sind, storniert Alpaca beim
+        # Ablauf automatisch AUCH den Stop-Loss. Die Position liefe danach
+        # bis zum naechsten regulaeren Exit-Signal komplett ungeschuetzt
+        # weiter (siehe Bugreport: PYPL/MRVL mit 10-15% statt ~2% Verlust).
+        # GTC ist fuer Bracket-Orders auf Alpaca-Aktien (regulaere
+        # Handelszeit, kein extended_hours) unterstuetzt; ausserhalb der
+        # regulaeren Handelszeit (extended_hours=True) erlaubt Alpaca fuer
+        # den Entry nur noch DAY + Limit-Order -- dieser Bot setzt
+        # extended_hours nirgends, betrifft ihn also nicht. Fuer Crypto
+        # bietet Alpaca ueberhaupt keine Bracket-/OCO-Orders an (nur simple
+        # Orders) -- ebenfalls irrelevant, dieser Bot handelt ausschliesslich
+        # US-Aktien.
         order_request = MarketOrderRequest(
             symbol=symbol,
             qty=qty,
             side=OrderSide.BUY,
-            time_in_force=TimeInForce.DAY,
+            time_in_force=TimeInForce.GTC,
             order_class=OrderClass.BRACKET,
             take_profit=TakeProfitRequest(limit_price=prices.take_profit),
             stop_loss=StopLossRequest(stop_price=prices.stop_loss),
@@ -97,6 +119,35 @@ class OrderExecutor:
             return self._client.get_orders(request)
         except APIError as exc:
             raise OrderExecutionError(f"Failed to fetch open orders for {symbol}: {exc}") from exc
+
+    def has_active_stop_loss(self, symbol: str) -> bool:
+        """True, wenn fuer `symbol` gerade eine offene SELL-Stop-Order
+        existiert (typischerweise das Stop-Loss-Leg einer Bracket-Order).
+        Sicherheitsnetz-Check aus bot.py: eine offene Position sollte NIE
+        ohne aktiven Stop dastehen, egal aus welchem Grund (siehe
+        submit_bracket_buy's GTC-Kommentar zum urspruenglichen Bug).
+        """
+        return any(
+            order.side == OrderSide.SELL and order.type in self._STOP_ORDER_TYPES
+            for order in self._get_open_orders(symbol)
+        )
+
+    def submit_protective_stop_loss(self, symbol: str, qty: float, stop_price: float) -> Order:
+        """Legt eine eigenstaendige Stop-Loss-Order nach, wenn eine offene
+        Position keine aktive mehr hat. GTC (siehe submit_bracket_buy),
+        damit sie nicht auf dieselbe Weise wieder verschwinden kann.
+        """
+        order_request = StopOrderRequest(
+            symbol=symbol,
+            qty=qty,
+            side=OrderSide.SELL,
+            time_in_force=TimeInForce.GTC,
+            stop_price=stop_price,
+        )
+        try:
+            return self._client.submit_order(order_request)
+        except APIError as exc:
+            raise OrderExecutionError(f"Failed to submit protective stop-loss for {symbol}: {exc}") from exc
 
     def _cancel_open_orders(self, symbol: str) -> None:
         """Cancels every open order for a symbol -- in particular the

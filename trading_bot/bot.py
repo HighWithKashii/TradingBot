@@ -192,6 +192,8 @@ class TradingBot:
             logger.error("Could not fetch open positions — skipping cycle: %s", exc)
             return
 
+        self._check_position_protection(positions)
+
         # Erster Zyklus nach dem Start: die vom Backfill vorgeladenen Bars
         # wiederverwenden statt dieselben Daten nochmal abzurufen -- aber
         # nur, wenn der Backfill nicht laenger als zwei Scan-Intervalle her
@@ -218,6 +220,47 @@ class TradingBot:
         if counts["ERROR"]:
             summary += f", {counts['ERROR']} ERROR"
         logger.info("Scan complete: %s (duration: %.1fs)", summary, elapsed)
+
+    def _check_position_protection(self, positions: dict) -> None:
+        """Sicherheitsnetz: prueft bei jedem Zyklus, ob jede offene Position
+        noch eine aktive Stop-Loss-Order hat. Alpaca kann beide Bracket-Legs
+        gleichzeitig verwerfen (z.B. eine am Handelsschluss nicht gefuellte
+        Take-Profit-Limit-Order laeuft ab und storniert ueber die OCO-
+        Verknuepfung automatisch auch den Stop-Loss) -- die Position liefe
+        danach bis zum naechsten regulaeren Exit-Signal komplett ungeschuetzt
+        weiter, ohne dass das sonst irgendwo auffaellt. Legt bei Bedarf
+        automatisch eine neue Stop-Loss-Order nach und alarmiert per Telegram.
+        """
+        for symbol, position in positions.items():
+            try:
+                if self._executor.has_active_stop_loss(symbol):
+                    continue
+            except OrderExecutionError as exc:
+                logger.error("Konnte Stop-Loss-Status fuer %s nicht pruefen: %s", symbol, exc)
+                continue
+
+            qty = float(getattr(position, "qty_available", None) or position.qty)
+            entry_price = float(position.avg_entry_price)
+            stop_price = self._risk_manager.calculate_bracket_prices(entry_price).stop_loss
+            detail = f"Position: {qty:g} Stk. @ Entry {entry_price:.2f}."
+
+            logger.warning(
+                f"{Fore.RED}UNGESCHUETZTE POSITION: %s (%.0f Stk.) hat keine aktive Stop-Loss-Order! "
+                f"Versuche, automatisch eine neue @ %.2f nachzulegen.{Style.RESET_ALL}",
+                symbol,
+                qty,
+                stop_price,
+            )
+            try:
+                self._executor.submit_protective_stop_loss(symbol, qty, stop_price)
+                detail += f" Neue Stop-Loss-Order @ {stop_price:.2f} automatisch nachgelegt."
+                logger.info("Stop-Loss fuer %s @ %.2f erfolgreich nachgelegt.", symbol, stop_price)
+            except OrderExecutionError as exc:
+                detail += f" AUTOMATISCHES NACHLEGEN FEHLGESCHLAGEN: {exc}"
+                logger.error("Konnte Stop-Loss fuer %s NICHT automatisch nachlegen: %s", symbol, exc)
+
+            self._failure_notifier.notify_unprotected_position(symbol, detail)
+            self._trade_logger.log(symbol=symbol, action="ALERT", reason=detail, status="warning")
 
     def _process_symbol(self, symbol, bars, position, equity: float, buying_power: float) -> str:
         try:

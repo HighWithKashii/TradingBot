@@ -96,7 +96,21 @@ class TradeFailureNotifier:
     def notify_order_failure(self, symbol: str, order_kind: str, exc: BaseException) -> None:
         """order_kind z.B. "Buy Order", "Sell Order", "Bracket Buy Order"."""
         reason = extract_alpaca_reason(exc)
-        throttle_key = f"{symbol}:{order_kind}"
+        message = f"Trade fehlgeschlagen: {symbol} {order_kind} abgelehnt, Grund: {reason}"
+        self._send_throttled(f"{symbol}:{order_kind}", message, suppressed_label="weitere gleichartige Fehlschlaege")
+
+    def notify_unprotected_position(self, symbol: str, detail: str) -> None:
+        """Sicherheitsnetz-Alarm (siehe bot._check_position_protection):
+        eine offene Position hat gerade keine aktive Stop-Loss-Order --
+        egal aus welchem Grund (z.B. eine abgelaufene, OCO-verknuepfte
+        Take-Profit-Order hat beim Ablauf automatisch auch den Stop-Loss
+        storniert). `detail` sollte kurz zusammenfassen, was der Bot dagegen
+        unternommen hat (neue Stop-Loss-Order nachgelegt oder nicht).
+        """
+        message = f"WARNUNG: {symbol} hat aktuell KEINEN aktiven Stop-Loss! {detail}"
+        self._send_throttled(f"{symbol}:Unprotected Position", message, suppressed_label="weitere gleichartige Warnungen")
+
+    def _send_throttled(self, throttle_key: str, message: str, suppressed_label: str) -> None:
         now = time.monotonic()
 
         with self._lock:
@@ -114,8 +128,7 @@ class TradeFailureNotifier:
             suppressed = self._suppressed_count.pop(throttle_key, 0)
             self._last_sent_at[throttle_key] = now
 
-        message = f"Trade fehlgeschlagen: {symbol} {order_kind} abgelehnt, Grund: {reason}"
         if suppressed:
-            message += f"\n({suppressed} weitere gleichartige Fehlschlaege in den letzten {int(self._throttle_seconds // 60)} Minuten unterdrueckt)"
+            message += f"\n({suppressed} {suppressed_label} in den letzten {int(self._throttle_seconds // 60)} Minuten unterdrueckt)"
 
         send_telegram_message(self._config, message)

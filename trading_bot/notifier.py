@@ -99,16 +99,27 @@ class TradeFailureNotifier:
         message = f"Trade fehlgeschlagen: {symbol} {order_kind} abgelehnt, Grund: {reason}"
         self._send_throttled(f"{symbol}:{order_kind}", message, suppressed_label="weitere gleichartige Fehlschlaege")
 
-    def notify_unprotected_position(self, symbol: str, detail: str) -> None:
+    def notify_unprotected_position(self, symbol: str, detail: str, critical: bool = False) -> None:
         """Sicherheitsnetz-Alarm (siehe bot._check_position_protection):
         eine offene Position hat gerade keine aktive Stop-Loss-Order --
         egal aus welchem Grund (z.B. eine abgelaufene, OCO-verknuepfte
         Take-Profit-Order hat beim Ablauf automatisch auch den Stop-Loss
         storniert). `detail` sollte kurz zusammenfassen, was der Bot dagegen
         unternommen hat (neue Stop-Loss-Order nachgelegt oder nicht).
+
+        `critical=True`: der Bot konnte die Position weder per neuer
+        Stop-Loss-Order noch per Market-Sell schuetzen (Kurs bereits durch
+        den Stop-Preis durchgebrochen UND auch der Notfall-Market-Sell
+        fehlgeschlagen) -- eigene Alert-Stufe ("KRITISCH:" statt "WARNUNG:")
+        und eigener Drossel-Schluessel, damit ein kritischer Alarm nicht
+        stillschweigend im Drossel-Fenster einer vorherigen normalen Warnung
+        fuer dasselbe Symbol untergeht.
         """
-        message = f"WARNUNG: {symbol} hat aktuell KEINEN aktiven Stop-Loss! {detail}"
-        self._send_throttled(f"{symbol}:Unprotected Position", message, suppressed_label="weitere gleichartige Warnungen")
+        prefix = "KRITISCH" if critical else "WARNUNG"
+        throttle_key = f"{symbol}:Unprotected Position" + (" (KRITISCH)" if critical else "")
+        suppressed_label = "weitere kritische Warnungen" if critical else "weitere gleichartige Warnungen"
+        message = f"{prefix}: {symbol} hat aktuell KEINEN aktiven Stop-Loss! {detail}"
+        self._send_throttled(throttle_key, message, suppressed_label=suppressed_label)
 
     def _send_throttled(self, throttle_key: str, message: str, suppressed_label: str) -> None:
         now = time.monotonic()

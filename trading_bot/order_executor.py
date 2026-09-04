@@ -34,8 +34,38 @@ from trading_bot.risk_manager import BracketPrices
 logger = logging.getLogger("trading_bot")
 
 
+def _is_stop_price_breached_error(exc: APIError) -> bool:
+    """True, wenn eine APIError speziell Alpacas Fehlercode 42210000
+    ("stop price must be less than current price") ist. `.code` parst den
+    JSON-Fehlerkoerper und kann bei einem unerwarteten/nicht-JSON Body
+    scheitern -- dann faellt das auf einen Text-Vergleich zurueck.
+    """
+    try:
+        if exc.code == _STOP_PRICE_BREACHED_ERROR_CODE:
+            return True
+    except Exception:
+        pass
+    return "stop price must be less than current price" in str(exc).lower()
+
+
 class OrderExecutionError(Exception):
     pass
+
+
+class StopPriceAlreadyBreachedError(OrderExecutionError):
+    """Alpaca hat eine Stop-Order abgelehnt, weil der aktuelle Marktpreis den
+    berechneten Stop-Preis bereits durchbrochen hat (Alpaca-Fehlercode
+    42210000, "stop price must be less than current price") -- typischerweise
+    weil der Kurs zwischen Sicherheits-Check und Order-Submit so schnell
+    gefallen ist, dass eine reine Stop-Order rechnerisch nicht mehr gueltig
+    ist. Eigene Exception, damit der Aufrufer (bot._check_position_protection)
+    das gezielt von anderen Fehlern unterscheiden und stattdessen sofort
+    per Market-Sell schliessen kann, statt es beim geloggten Fehlschlag zu
+    belassen.
+    """
+
+
+_STOP_PRICE_BREACHED_ERROR_CODE = 42210000
 
 
 class OrderExecutor:
@@ -136,6 +166,12 @@ class OrderExecutor:
         """Legt eine eigenstaendige Stop-Loss-Order nach, wenn eine offene
         Position keine aktive mehr hat. GTC (siehe submit_bracket_buy),
         damit sie nicht auf dieselbe Weise wieder verschwinden kann.
+
+        Wirft StopPriceAlreadyBreachedError statt der generischen
+        OrderExecutionError, wenn Alpaca speziell wegen Fehlercode 42210000
+        ("stop price must be less than current price") ablehnt -- der Kurs
+        ist dann bereits unter den berechneten Stop-Preis gefallen, eine
+        weitere Stop-Order waere sinnlos.
         """
         order_request = StopOrderRequest(
             symbol=symbol,
@@ -147,6 +183,11 @@ class OrderExecutor:
         try:
             return self._client.submit_order(order_request)
         except APIError as exc:
+            if _is_stop_price_breached_error(exc):
+                raise StopPriceAlreadyBreachedError(
+                    f"Stop-Preis {stop_price} fuer {symbol} liegt nicht mehr unter dem aktuellen "
+                    f"Marktpreis (Kurs vermutlich zwischen Pruefung und Order-Submit gefallen): {exc}"
+                ) from exc
             raise OrderExecutionError(f"Failed to submit protective stop-loss for {symbol}: {exc}") from exc
 
     def _cancel_open_orders(self, symbol: str) -> None:

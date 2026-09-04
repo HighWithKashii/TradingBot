@@ -22,7 +22,7 @@ import pandas as pd
 from trading_bot.config import Config
 from trading_bot.data_feed import MarketDataFeed
 from trading_bot.notifier import TradeFailureNotifier
-from trading_bot.order_executor import OrderExecutionError, OrderExecutor
+from trading_bot.order_executor import OrderExecutionError, OrderExecutor, StopPriceAlreadyBreachedError
 from trading_bot.risk_manager import RiskManager
 from trading_bot.strategy import (
     Action,
@@ -50,6 +50,16 @@ logger = logging.getLogger("trading_bot")
 
 
 class TradingBot:
+    # Sicherheitspuffer fuer nachgelegte Stop-Loss-Orders: der Stop wird nie
+    # hoeher als (aktueller Kurs * (1 - Puffer)) angesetzt, selbst wenn der
+    # eigentlich vorgesehene Stop (aus dem Entry-Preis berechnet) hoeher
+    # laege -- verhindert, dass eine kleine Verzoegerung zwischen dieser
+    # Pruefung und dem eigentlichen Order-Submit erneut zu Alpacas
+    # "stop price must be less than current price" fuehrt (siehe
+    # StopPriceAlreadyBreachedError fuer den Fall, dass der Kurs trotzdem
+    # schon durchgebrochen ist).
+    _PROTECTIVE_STOP_BUFFER_PCT = 0.1
+
     def __init__(
         self,
         config: Config,
@@ -230,8 +240,40 @@ class TradingBot:
         danach bis zum naechsten regulaeren Exit-Signal komplett ungeschuetzt
         weiter, ohne dass das sonst irgendwo auffaellt. Legt bei Bedarf
         automatisch eine neue Stop-Loss-Order nach und alarmiert per Telegram.
+
+        Zwei Sonderfaelle, die neben dem einfachen "Stop nachlegen"-Pfad
+        behandelt werden:
+        - Der Kurs ist bereits unter den berechneten Stop-Preis gefallen ->
+          Alpaca lehnt die neue Stop-Order ab (StopPriceAlreadyBreachedError).
+          Statt es dabei zu belassen, wird die Position sofort per Market-
+          Sell geschlossen; schlaegt das ebenfalls fehl, gibt es einen
+          eigenen "KRITISCH"-Alert statt der normalen Warnung.
+        - Position mit Menge 0 ("Phantom-Position"): wird VOR dem eigentlichen
+          Pruef-Loop komplett rausgefiltert, ganz ohne API-Aufruf fuer sie.
         """
+        to_check, phantom_symbols = {}, []
         for symbol, position in positions.items():
+            if float(position.qty) <= 0:
+                phantom_symbols.append(symbol)
+                continue
+            to_check[symbol] = position
+
+        if phantom_symbols:
+            # get_all_positions() sollte eine vollstaendig geschlossene
+            # Position eigentlich gar nicht mehr zurueckliefern -- passiert
+            # das trotzdem, ist die wahrscheinlichste Erklaerung ein kurzes
+            # Timing-Fenster zwischen einem gerade gefuellten Verkauf und dem
+            # naechsten Positions-Snapshot (oder kurzzeitig veraltete Daten
+            # auf Alpacas Seite). Fuer eine Menge von 0 gibt es nichts zu
+            # schuetzen -- das Ueberspringen selbst ist bereits die
+            # ausreichende Absicherung, kein API-Aufruf noetig.
+            logger.debug(
+                "Stop-Loss-Pruefung: %d Position(en) mit Menge 0 uebersprungen (bereits geschlossen): %s",
+                len(phantom_symbols),
+                ", ".join(phantom_symbols),
+            )
+
+        for symbol, position in to_check.items():
             try:
                 if self._executor.has_active_stop_loss(symbol):
                     continue
@@ -241,9 +283,13 @@ class TradingBot:
 
             qty = float(getattr(position, "qty_available", None) or position.qty)
             entry_price = float(position.avg_entry_price)
-            stop_price = self._risk_manager.calculate_bracket_prices(entry_price).stop_loss
-            detail = f"Position: {qty:g} Stk. @ Entry {entry_price:.2f}."
+            intended_stop = self._risk_manager.calculate_bracket_prices(entry_price).stop_loss
 
+            current_price = float(getattr(position, "current_price", None) or entry_price)
+            max_valid_stop = current_price * (1 - self._PROTECTIVE_STOP_BUFFER_PCT / 100)
+            stop_price = min(intended_stop, max_valid_stop)
+
+            detail = f"Position: {qty:g} Stk. @ Entry {entry_price:.2f}."
             logger.warning(
                 f"{Fore.RED}UNGESCHUETZTE POSITION: %s (%.0f Stk.) hat keine aktive Stop-Loss-Order! "
                 f"Versuche, automatisch eine neue @ %.2f nachzulegen.{Style.RESET_ALL}",
@@ -255,6 +301,31 @@ class TradingBot:
                 self._executor.submit_protective_stop_loss(symbol, qty, stop_price)
                 detail += f" Neue Stop-Loss-Order @ {stop_price:.2f} automatisch nachgelegt."
                 logger.info("Stop-Loss fuer %s @ %.2f erfolgreich nachgelegt.", symbol, stop_price)
+            except StopPriceAlreadyBreachedError as exc:
+                logger.warning(
+                    "%s: Stop-Preis bereits vom aktuellen Kurs durchbrochen (%s) -- schliesse Position "
+                    "sofort per Market-Sell, statt weiter eine ungueltige Stop-Order zu versuchen.",
+                    symbol,
+                    exc,
+                )
+                try:
+                    self._executor.close_position(symbol)
+                    detail += f" Stop-Preis war bereits durchbrochen -> Position sofort per Market-Sell geschlossen ({exc})."
+                    logger.info("%s per Market-Sell geschlossen (Stop-Preis war bereits durchbrochen).", symbol)
+                except OrderExecutionError as close_exc:
+                    detail += (
+                        f" KRITISCH: Stop-Preis bereits durchbrochen UND automatischer Market-Sell "
+                        f"fehlgeschlagen: {close_exc}"
+                    )
+                    logger.critical(
+                        "KRITISCH: %s bleibt UNGESCHUETZT -- Stop-Preis durchbrochen UND Market-Sell "
+                        "fehlgeschlagen: %s",
+                        symbol,
+                        close_exc,
+                    )
+                    self._failure_notifier.notify_unprotected_position(symbol, detail, critical=True)
+                    self._trade_logger.log(symbol=symbol, action="ALERT", reason=detail, status="critical")
+                    continue
             except OrderExecutionError as exc:
                 detail += f" AUTOMATISCHES NACHLEGEN FEHLGESCHLAGEN: {exc}"
                 logger.error("Konnte Stop-Loss fuer %s NICHT automatisch nachlegen: %s", symbol, exc)

@@ -22,6 +22,7 @@ from alpaca.trading.enums import OrderClass, OrderSide, OrderType, QueryOrderSta
 from alpaca.trading.models import Order, Position, TradeAccount
 from alpaca.trading.requests import (
     GetOrdersRequest,
+    LimitOrderRequest,
     MarketOrderRequest,
     StopLossRequest,
     StopOrderRequest,
@@ -66,6 +67,21 @@ class StopPriceAlreadyBreachedError(OrderExecutionError):
 
 
 _STOP_PRICE_BREACHED_ERROR_CODE = 42210000
+
+
+def is_orphaned_take_profit_order(order: Order) -> bool:
+    """True, wenn eine offene Order aussieht wie das Take-Profit-Leg einer
+    Bracket-Order (SELL-Limit, order_class=bracket). Sagt fuer sich allein
+    NICHTS darueber aus, ob das zugehoerige Stop-Loss-Leg fehlt -- das prueft
+    der Aufrufer separat (typischerweise has_active_stop_loss(symbol) ==
+    False). Eine echte, gerade laufende Exit-Order durch ein Handelssignal
+    ist dagegen ein einfacher Market-Sell (order_class=simple, type=market,
+    siehe close_position()) und wird hier bewusst NICHT erfasst -- genau
+    diese Unterscheidung macht die Klassifizierung sicher genug, um eine
+    automatische Reparatur (stornieren + sauberes neues Paar) zu erlauben,
+    ohne eine tatsaechlich in Arbeit befindliche andere Order anzutasten.
+    """
+    return order.order_class == OrderClass.BRACKET and order.type == OrderType.LIMIT and order.side == OrderSide.SELL
 
 
 class OrderExecutor:
@@ -151,7 +167,11 @@ class OrderExecutor:
         except APIError as exc:
             raise OrderExecutionError(f"Failed to submit bracket buy order for {symbol}: {exc}") from exc
 
-    def _get_open_orders(self, symbol: str) -> list[Order]:
+    def get_open_orders(self, symbol: str) -> list[Order]:
+        """Oeffentlich (nicht mehr `_get_open_orders`): wird ausserhalb
+        dieser Klasse gebraucht, um blockierende Orders zu klassifizieren
+        (siehe bot._check_position_protection und scan_position_protection.py).
+        """
         request = GetOrdersRequest(status=QueryOrderStatus.OPEN, symbols=[symbol])
         try:
             return self._client.get_orders(request)
@@ -167,7 +187,7 @@ class OrderExecutor:
         """
         return any(
             order.side == OrderSide.SELL and order.type in self._STOP_ORDER_TYPES
-            for order in self._get_open_orders(symbol)
+            for order in self.get_open_orders(symbol)
         )
 
     def submit_protective_stop_loss(self, symbol: str, qty: float, stop_price: float) -> Order:
@@ -203,12 +223,80 @@ class OrderExecutor:
                 ) from exc
             raise OrderExecutionError(f"Failed to submit protective stop-loss for {symbol}: {exc}") from exc
 
+    def cancel_order(self, order_id, symbol: str) -> None:
+        """Storniert genau EINE Order per ID und wartet/pollt, bis Alpaca
+        das bestaetigt (asynchron auf Alpacas Seite). Im Unterschied zu
+        _cancel_open_orders() (storniert ALLES fuer ein Symbol und macht bei
+        Timeout trotzdem weiter) wirft diese Methode OrderExecutionError,
+        wenn die Stornierung nach cancel_poll_attempts nicht bestaetigt ist
+        -- fuer den Aufrufer (Reparatur einer verwaisten Order, siehe
+        bot._check_position_protection) MUSS die Stornierung sicher
+        bestaetigt sein, bevor eine neue Order fuer dieselben, gerade erst
+        freigewordenen Aktien abgeschickt wird, sonst droht wieder
+        "insufficient qty".
+        """
+        try:
+            self._client.cancel_order_by_id(order_id)
+        except APIError as exc:
+            if getattr(exc, "status_code", None) in (404, 409, 422):
+                logger.info(
+                    "Order %s fuer %s war beim Cancel-Versuch bereits erledigt (Status %s) -- ok.",
+                    order_id,
+                    symbol,
+                    getattr(exc, "status_code", None),
+                )
+                return
+            raise OrderExecutionError(f"Failed to cancel order {order_id} for {symbol}: {exc}") from exc
+
+        for _ in range(self._cancel_poll_attempts):
+            still_open = {order.id for order in self.get_open_orders(symbol)}
+            if order_id not in still_open:
+                logger.info("Order %s fuer %s storniert und bestaetigt.", order_id, symbol)
+                return
+            time.sleep(self._cancel_poll_interval_seconds)
+
+        still_open = {order.id for order in self.get_open_orders(symbol)}
+        if order_id in still_open:
+            raise OrderExecutionError(
+                f"Order {order_id} fuer {symbol} wurde storniert, ist aber nach "
+                f"{self._cancel_poll_attempts} Versuchen immer noch als offen gelistet."
+            )
+        logger.info("Order %s fuer %s storniert und bestaetigt.", order_id, symbol)
+
+    def submit_oco_exit(self, symbol: str, qty: float, prices: BracketPrices) -> Order:
+        """Legt ein neues Stop-Loss+Take-Profit-Paar (OCO, "One-Cancels-
+        Other") fuer eine BEREITS BESTEHENDE Position nach -- anders als
+        submit_bracket_buy() wird hier NICHTS gekauft, nur ein sauberes
+        Exit-Paar fuer Aktien nachgelegt, die der Bot schon haelt (z.B.
+        nachdem eine verwaiste Take-Profit-Order ohne Stop-Loss-Gegenstueck
+        storniert wurde -- siehe is_orphaned_take_profit_order). Beide Legs
+        GTC (siehe submit_bracket_buy), beide Preise defensiv gerundet.
+        """
+        order_request = LimitOrderRequest(
+            symbol=symbol,
+            qty=qty,
+            side=OrderSide.SELL,
+            time_in_force=TimeInForce.GTC,
+            order_class=OrderClass.OCO,
+            take_profit=TakeProfitRequest(limit_price=round_to_valid_tick(prices.take_profit)),
+            stop_loss=StopLossRequest(stop_price=round_to_valid_tick(prices.stop_loss)),
+        )
+        try:
+            return self._client.submit_order(order_request)
+        except APIError as exc:
+            if _is_stop_price_breached_error(exc):
+                raise StopPriceAlreadyBreachedError(
+                    f"Stop-Preis {prices.stop_loss} fuer {symbol} liegt nicht mehr unter dem aktuellen "
+                    f"Marktpreis: {exc}"
+                ) from exc
+            raise OrderExecutionError(f"Failed to submit OCO exit pair for {symbol}: {exc}") from exc
+
     def _cancel_open_orders(self, symbol: str) -> None:
         """Cancels every open order for a symbol -- in particular the
         stop-loss/take-profit legs left over from a bracket buy -- and polls
         until Alpaca confirms none are left (or the retry budget runs out).
         """
-        open_orders = self._get_open_orders(symbol)
+        open_orders = self.get_open_orders(symbol)
         if not open_orders:
             return
 
@@ -224,11 +312,11 @@ class OrderExecutor:
                     ) from exc
 
         for _ in range(self._cancel_poll_attempts):
-            if not self._get_open_orders(symbol):
+            if not self.get_open_orders(symbol):
                 return
             time.sleep(self._cancel_poll_interval_seconds)
 
-        remaining = self._get_open_orders(symbol)
+        remaining = self.get_open_orders(symbol)
         if remaining:
             logger.warning(
                 "%d order(s) for %s still open after cancel + %d retries — attempting close anyway",

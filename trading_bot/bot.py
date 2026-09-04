@@ -22,8 +22,13 @@ import pandas as pd
 from trading_bot.config import Config
 from trading_bot.data_feed import MarketDataFeed
 from trading_bot.notifier import TradeFailureNotifier
-from trading_bot.order_executor import OrderExecutionError, OrderExecutor, StopPriceAlreadyBreachedError
-from trading_bot.risk_manager import RiskManager, round_to_valid_tick
+from trading_bot.order_executor import (
+    OrderExecutionError,
+    OrderExecutor,
+    StopPriceAlreadyBreachedError,
+    is_orphaned_take_profit_order,
+)
+from trading_bot.risk_manager import BracketPrices, RiskManager, round_to_valid_tick
 from trading_bot.strategy import (
     Action,
     combine_with_pattern_signal,
@@ -248,6 +253,44 @@ class TradingBot:
             parsed = 0.0
         return parsed if parsed > 0 else default
 
+    def _market_sell_fallback(self, symbol: str, detail: str, reason: str) -> str | None:
+        """Schliesst eine Position per Market-Sell, nachdem eine Stop-Order
+        wegen bereits durchbrochenem Kurs abgelehnt wurde (siehe
+        StopPriceAlreadyBreachedError) -- egal ob auf dem normalen Nachlege-
+        Pfad oder nach der Reparatur einer verwaisten Take-Profit-Order.
+        Gibt den erweiterten `detail`-Text bei Erfolg zurueck; bei
+        Fehlschlag wurde bereits ein KRITISCH-Alert verschickt/geloggt und
+        None zurueckgegeben -- der Aufrufer soll dann direkt `continue`n.
+        """
+        try:
+            closed_order = self._executor.close_position(symbol)
+        except OrderExecutionError as close_exc:
+            detail += f" KRITISCH: {reason} UND automatischer Market-Sell fehlgeschlagen: {close_exc}"
+            logger.critical(
+                "KRITISCH: %s bleibt UNGESCHUETZT -- %s UND Market-Sell fehlgeschlagen: %s",
+                symbol,
+                reason,
+                close_exc,
+            )
+            self._failure_notifier.notify_unprotected_position(symbol, detail, critical=True)
+            self._trade_logger.log(symbol=symbol, action="ALERT", reason=detail, status="critical")
+            return None
+
+        # Nur hier angekommen, wenn close_position() ohne Fehler eine von
+        # Alpaca angenommene Order zurueckgegeben hat -- der "geschlossen"-
+        # Erfolg wird also durch die tatsaechliche Order-Response belegt
+        # (Order-ID + Status), nicht bloss dadurch, dass dieser Pfad
+        # erreicht wurde.
+        detail += f" {reason} -> Position per Market-Sell geschlossen (Order {closed_order.id}, Status {closed_order.status})."
+        logger.info(
+            "%s per Market-Sell geschlossen (%s; Order-ID %s, Status %s).",
+            symbol,
+            reason,
+            closed_order.id,
+            closed_order.status,
+        )
+        return detail
+
     def _check_position_protection(self, positions: dict) -> None:
         """Sicherheitsnetz: prueft bei jedem Zyklus, ob jede offene Position
         noch eine aktive Stop-Loss-Order hat. Alpaca kann beide Bracket-Legs
@@ -270,6 +313,19 @@ class TradingBot:
           Berechnung, damit ein Fehler hier klar als "Berechnung
           fehlgeschlagen" gemeldet wird -- und NICHT stillschweigend in
           einen der spaeteren Erfolgspfade durchrutscht.
+        - Die Aktien sind bereits durch eine andere offene Order blockiert
+          (z.B. eine verwaiste Take-Profit-Order ohne zugehoeriges
+          Stop-Loss-Leg, siehe is_orphaned_take_profit_order): eine blind
+          versuchte neue Stop-Order wuerde hier zwangslaeufig mit
+          "insufficient qty available for order" scheitern und sich jeden
+          Zyklus identisch wiederholen, ohne das eigentliche Problem
+          anzugehen. Ist die blockierende Order eindeutig als verwaiste
+          Take-Profit-Order erkennbar, wird sie storniert und ein sauberes
+          neues Stop-Loss+Take-Profit-Paar (OCO) nachgelegt. Ist NICHT
+          eindeutig erkennbar, ob eine blockierende Order gefahrlos
+          storniert werden darf (z.B. eine gerade laufende reguläre
+          Exit-Order), wird NICHTS automatisch angefasst, sondern nur klar
+          alarmiert, was blockiert.
         - Der Kurs ist bereits unter den berechneten Stop-Preis gefallen ->
           Alpaca lehnt die neue Stop-Order ab (StopPriceAlreadyBreachedError).
           Die Position wird dann per Market-Sell geschlossen -- der
@@ -314,9 +370,9 @@ class TradingBot:
                 qty = self._positive_float(getattr(position, "qty_available", None), default=float(position.qty))
                 entry_price = float(position.avg_entry_price)
                 current_price = self._positive_float(getattr(position, "current_price", None), default=entry_price)
-                intended_stop = self._risk_manager.calculate_bracket_prices(entry_price).stop_loss
+                bracket_prices = self._risk_manager.calculate_bracket_prices(entry_price)
                 max_valid_stop = current_price * (1 - self._PROTECTIVE_STOP_BUFFER_PCT / 100)
-                stop_price = round_to_valid_tick(min(intended_stop, max_valid_stop))
+                stop_price = round_to_valid_tick(min(bracket_prices.stop_loss, max_valid_stop))
             except Exception as exc:
                 detail = f"Stop-Preis-Berechnung fuer {symbol} fehlgeschlagen: {exc}"
                 logger.critical(
@@ -330,6 +386,17 @@ class TradingBot:
                 continue
 
             detail = f"Position: {qty:g} Stk. @ Entry {entry_price:.2f}."
+
+            try:
+                blocking_orders = self._executor.get_open_orders(symbol)
+            except OrderExecutionError as exc:
+                logger.error("Konnte offene Orders fuer %s nicht abfragen: %s", symbol, exc)
+                continue
+
+            if blocking_orders:
+                self._repair_blocked_position(symbol, position, blocking_orders, stop_price, bracket_prices, detail)
+                continue
+
             logger.warning(
                 f"{Fore.RED}UNGESCHUETZTE POSITION: %s (%.0f Stk.) hat keine aktive Stop-Loss-Order! "
                 f"Versuche, automatisch eine neue @ %.2f nachzulegen.{Style.RESET_ALL}",
@@ -346,37 +413,9 @@ class TradingBot:
                     symbol,
                     exc,
                 )
-                try:
-                    closed_order = self._executor.close_position(symbol)
-                except OrderExecutionError as close_exc:
-                    detail += (
-                        f" KRITISCH: Stop-Preis bereits durchbrochen UND automatischer Market-Sell "
-                        f"fehlgeschlagen: {close_exc}"
-                    )
-                    logger.critical(
-                        "KRITISCH: %s bleibt UNGESCHUETZT -- Stop-Preis durchbrochen UND Market-Sell "
-                        "fehlgeschlagen: %s",
-                        symbol,
-                        close_exc,
-                    )
-                    self._failure_notifier.notify_unprotected_position(symbol, detail, critical=True)
-                    self._trade_logger.log(symbol=symbol, action="ALERT", reason=detail, status="critical")
+                detail = self._market_sell_fallback(symbol, detail, "Stop-Preis bereits durchbrochen")
+                if detail is None:
                     continue
-                # Nur hier angekommen, wenn close_position() ohne Fehler
-                # eine von Alpaca angenommene Order zurueckgegeben hat --
-                # der "geschlossen"-Erfolg wird also durch die tatsaechliche
-                # Order-Response belegt (Order-ID + Status), nicht bloss
-                # dadurch, dass dieser Code-Pfad erreicht wurde.
-                detail += (
-                    f" Stop-Preis war bereits durchbrochen -> Position per Market-Sell geschlossen "
-                    f"(Order {closed_order.id}, Status {closed_order.status})."
-                )
-                logger.info(
-                    "%s per Market-Sell geschlossen (Stop-Preis war bereits durchbrochen; Order-ID %s, Status %s).",
-                    symbol,
-                    closed_order.id,
-                    closed_order.status,
-                )
             except OrderExecutionError as exc:
                 detail += f" AUTOMATISCHES NACHLEGEN FEHLGESCHLAGEN: {exc}"
                 logger.error("Konnte Stop-Loss fuer %s NICHT automatisch nachlegen: %s", symbol, exc)
@@ -386,6 +425,98 @@ class TradingBot:
 
             self._failure_notifier.notify_unprotected_position(symbol, detail)
             self._trade_logger.log(symbol=symbol, action="ALERT", reason=detail, status="warning")
+
+    def _repair_blocked_position(
+        self, symbol: str, position, blocking_orders: list, stop_price: float, bracket_prices: BracketPrices, detail: str
+    ) -> None:
+        """Eine ungeschuetzte Position, deren Aktien bereits durch mindestens
+        eine andere offene Order gebunden sind (`blocking_orders`) -- eine
+        blind versuchte neue Stop-Order wuerde hier zwangslaeufig mit
+        Alpacas "insufficient qty available for order" scheitern.
+
+        Sind ALLE blockierenden Orders eindeutig verwaiste Take-Profit-Legs
+        (siehe is_orphaned_take_profit_order), werden sie storniert und ein
+        sauberes neues Stop-Loss+Take-Profit-Paar (OCO) fuer die volle,
+        jetzt wieder freie Menge nachgelegt. Ist auch nur EINE blockierende
+        Order nicht eindeutig als solche erkennbar (z.B. eine gerade
+        laufende reguläre Exit-Order), wird GAR NICHTS automatisch
+        angefasst -- auch die eindeutigen Waisen nicht -- sondern nur klar
+        alarmiert, was blockiert und dass hier manuell geschaut werden muss.
+        """
+        unrecognized = [o for o in blocking_orders if not is_orphaned_take_profit_order(o)]
+        if unrecognized:
+            order_descr = "; ".join(
+                f"{o.id} ({getattr(o.type, 'value', o.type)}/{getattr(o.order_class, 'value', o.order_class)}/"
+                f"{getattr(o.status, 'value', o.status)}, seit {o.created_at})"
+                for o in unrecognized
+            )
+            detail += (
+                f" {len(unrecognized)} offene Order(n) blockieren die Aktien, nicht eindeutig als verwaiste "
+                f"Take-Profit-Order erkennbar -- KEINE automatische Aktion, manuelle Pruefung noetig: {order_descr}"
+            )
+            logger.critical(
+                "KRITISCH: %s -- unklare blockierende Order(n), manuelle Pruefung noetig: %s", symbol, order_descr
+            )
+            self._failure_notifier.notify_unprotected_position(symbol, detail, critical=True)
+            self._trade_logger.log(symbol=symbol, action="ALERT", reason=detail, status="critical")
+            return
+
+        logger.warning(
+            f"{Fore.RED}%s: %d verwaiste Take-Profit-Order(en) ohne zugehoeriges Stop-Loss blockieren die "
+            f"Position -- storniere und lege sauberes Exit-Paar nach.{Style.RESET_ALL}",
+            symbol,
+            len(blocking_orders),
+        )
+        for orphan in blocking_orders:
+            try:
+                self._executor.cancel_order(orphan.id, symbol)
+                logger.info("Verwaiste Take-Profit-Order %s fuer %s storniert.", orphan.id, symbol)
+            except OrderExecutionError as exc:
+                detail += f" KRITISCH: verwaiste Take-Profit-Order {orphan.id} konnte nicht storniert werden: {exc}"
+                logger.critical(
+                    "KRITISCH: %s -- Stornierung der verwaisten Order %s fehlgeschlagen: %s", symbol, orphan.id, exc
+                )
+                self._failure_notifier.notify_unprotected_position(symbol, detail, critical=True)
+                self._trade_logger.log(symbol=symbol, action="ALERT", reason=detail, status="critical")
+                return
+
+        full_qty = float(position.qty)
+        exit_prices = BracketPrices(stop_loss=stop_price, take_profit=bracket_prices.take_profit)
+        try:
+            new_order = self._executor.submit_oco_exit(symbol, full_qty, exit_prices)
+        except StopPriceAlreadyBreachedError as exc:
+            logger.warning(
+                "%s: Stop-Preis nach Stornierung der verwaisten Order bereits durchbrochen (%s) -- "
+                "schliesse Position sofort per Market-Sell.",
+                symbol,
+                exc,
+            )
+            detail = self._market_sell_fallback(
+                symbol, detail, "Verwaiste Order storniert, aber Stop-Preis bereits durchbrochen"
+            )
+            if detail is None:
+                return
+        except OrderExecutionError as exc:
+            detail += f" Verwaiste Order storniert, aber neues Exit-Paar konnte NICHT nachgelegt werden: {exc}"
+            logger.critical(
+                "KRITISCH: %s bleibt UNGESCHUETZT nach Stornierung -- neues Exit-Paar fehlgeschlagen: %s", symbol, exc
+            )
+            self._failure_notifier.notify_unprotected_position(symbol, detail, critical=True)
+            self._trade_logger.log(symbol=symbol, action="ALERT", reason=detail, status="critical")
+            return
+        else:
+            detail += (
+                f" Verwaiste Take-Profit-Order(en) storniert, neues Stop-Loss+Take-Profit-Paar nachgelegt "
+                f"(Order {new_order.id})."
+            )
+            logger.info(
+                "%s: verwaistes Take-Profit-Leg repariert, neues Stop-Loss+Take-Profit-Paar nachgelegt (Order-ID %s).",
+                symbol,
+                new_order.id,
+            )
+
+        self._failure_notifier.notify_unprotected_position(symbol, detail)
+        self._trade_logger.log(symbol=symbol, action="ALERT", reason=detail, status="warning")
 
     def _process_symbol(self, symbol, bars, position, equity: float, buying_power: float) -> str:
         try:

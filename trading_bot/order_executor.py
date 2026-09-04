@@ -69,19 +69,43 @@ class StopPriceAlreadyBreachedError(OrderExecutionError):
 _STOP_PRICE_BREACHED_ERROR_CODE = 42210000
 
 
+_MULTI_LEG_ORDER_CLASSES = (OrderClass.BRACKET, OrderClass.OCO, OrderClass.OTO)
+
+
+def _flatten_order_legs(orders: list[Order]) -> list[Order]:
+    """Alpaca kann die Legs einer Multi-Leg-Order (bracket, oco, oto) je nach
+    Abfrage entweder als mehrere eigenstaendige flache Eintraege ODER
+    zusammengerollt im `.legs`-Feld der Parent-Order zurueckgeben (siehe
+    GetOrdersRequest(nested=...)). Diese Funktion raeumt beide Formen zu
+    EINER flachen Liste auf, in der Parent UND jedes Kind-Leg als eigener
+    Eintrag auftauchen -- unabhaengig davon, wie Alpaca im Einzelfall
+    tatsaechlich antwortet. Das ist die zentrale Stelle dafuer; jeder
+    Aufrufer von get_open_orders() bekommt das automatisch.
+    """
+    flattened: list[Order] = []
+    seen_ids = set()
+    for order in orders:
+        for candidate in (order, *(getattr(order, "legs", None) or [])):
+            if candidate.id not in seen_ids:
+                flattened.append(candidate)
+                seen_ids.add(candidate.id)
+    return flattened
+
+
 def is_orphaned_take_profit_order(order: Order) -> bool:
     """True, wenn eine offene Order aussieht wie das Take-Profit-Leg einer
-    Bracket-Order (SELL-Limit, order_class=bracket). Sagt fuer sich allein
-    NICHTS darueber aus, ob das zugehoerige Stop-Loss-Leg fehlt -- das prueft
-    der Aufrufer separat (typischerweise has_active_stop_loss(symbol) ==
-    False). Eine echte, gerade laufende Exit-Order durch ein Handelssignal
-    ist dagegen ein einfacher Market-Sell (order_class=simple, type=market,
-    siehe close_position()) und wird hier bewusst NICHT erfasst -- genau
-    diese Unterscheidung macht die Klassifizierung sicher genug, um eine
-    automatische Reparatur (stornieren + sauberes neues Paar) zu erlauben,
-    ohne eine tatsaechlich in Arbeit befindliche andere Order anzutasten.
+    Bracket- ODER OCO-Order (SELL-Limit, order_class in bracket/oco/oto).
+    Sagt fuer sich allein NICHTS darueber aus, ob das zugehoerige Stop-Loss-
+    Leg fehlt -- das prueft der Aufrufer separat (typischerweise
+    has_active_stop_loss(symbol) == False). Eine echte, gerade laufende
+    Exit-Order durch ein Handelssignal ist dagegen ein einfacher Market-Sell
+    (order_class=simple, type=market, siehe close_position()) und wird hier
+    bewusst NICHT erfasst -- genau diese Unterscheidung macht die
+    Klassifizierung sicher genug, um eine automatische Reparatur
+    (stornieren + sauberes neues Paar) zu erlauben, ohne eine tatsaechlich
+    in Arbeit befindliche andere Order anzutasten.
     """
-    return order.order_class == OrderClass.BRACKET and order.type == OrderType.LIMIT and order.side == OrderSide.SELL
+    return order.order_class in _MULTI_LEG_ORDER_CLASSES and order.type == OrderType.LIMIT and order.side == OrderSide.SELL
 
 
 class OrderExecutor:
@@ -171,12 +195,28 @@ class OrderExecutor:
         """Oeffentlich (nicht mehr `_get_open_orders`): wird ausserhalb
         dieser Klasse gebraucht, um blockierende Orders zu klassifizieren
         (siehe bot._check_position_protection und scan_position_protection.py).
+
+        `nested=True`, damit die Legs einer Multi-Leg-Order (bracket, oco,
+        oto) garantiert im `.legs`-Feld der jeweiligen Parent-Order landen,
+        statt sich darauf zu verlassen, dass Alpaca sie ohnehin flach mit
+        auflistet -- und _flatten_order_legs() raeumt das anschliessend
+        wieder zu einer flachen Liste auf, in der jedes Leg (Parent UND
+        Kinder) einzeln als eigenstaendige Order auftaucht, so wie es
+        has_active_stop_loss(), is_orphaned_take_profit_order() und das
+        Cancel/Poll in cancel_order()/_cancel_open_orders() erwarten. Ohne
+        das wurde bei OCO-Exit-Paaren (siehe submit_oco_exit) nur die
+        Take-Profit-Limit-Order als eigenstaendiger Eintrag erkannt, das
+        zugehoerige Stop-Loss-Leg blieb im `.legs`-Feld verborgen -- die
+        Sicherheitspruefung stufte ein frisch und korrekt repariertes OCO-
+        Paar dadurch faelschlich als "kein aktiver Stop" bzw. "unklare
+        blockierende Order" ein.
         """
-        request = GetOrdersRequest(status=QueryOrderStatus.OPEN, symbols=[symbol])
+        request = GetOrdersRequest(status=QueryOrderStatus.OPEN, symbols=[symbol], nested=True)
         try:
-            return self._client.get_orders(request)
+            orders = self._client.get_orders(request)
         except APIError as exc:
             raise OrderExecutionError(f"Failed to fetch open orders for {symbol}: {exc}") from exc
+        return _flatten_order_legs(orders)
 
     def has_active_stop_loss(self, symbol: str) -> bool:
         """True, wenn fuer `symbol` gerade eine offene SELL-Stop-Order

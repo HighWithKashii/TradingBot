@@ -29,7 +29,7 @@ from alpaca.trading.requests import (
 )
 
 from trading_bot.config import Config
-from trading_bot.risk_manager import BracketPrices
+from trading_bot.risk_manager import BracketPrices, round_to_valid_tick
 
 logger = logging.getLogger("trading_bot")
 
@@ -129,14 +129,22 @@ class OrderExecutor:
         # bietet Alpaca ueberhaupt keine Bracket-/OCO-Orders an (nur simple
         # Orders) -- ebenfalls irrelevant, dieser Bot handelt ausschliesslich
         # US-Aktien.
+        # round_to_valid_tick() nochmal defensiv hier (nicht nur in
+        # risk_manager.calculate_bracket_prices(), das diese Werte i.d.R.
+        # schon rundet) -- diese Stelle ist der tatsaechliche Request an
+        # Alpaca, damit ist sie die letzte Instanz, die einen ungueltigen
+        # Preis (siehe Bug: 354.62502 statt 354.63, von Alpaca abgelehnt
+        # mit "sub-penny increment does not fulfill minimum pricing
+        # criteria") garantiert verhindert, unabhaengig davon, ob der
+        # Aufrufer selbst schon gerundet hat.
         order_request = MarketOrderRequest(
             symbol=symbol,
             qty=qty,
             side=OrderSide.BUY,
             time_in_force=TimeInForce.GTC,
             order_class=OrderClass.BRACKET,
-            take_profit=TakeProfitRequest(limit_price=prices.take_profit),
-            stop_loss=StopLossRequest(stop_price=prices.stop_loss),
+            take_profit=TakeProfitRequest(limit_price=round_to_valid_tick(prices.take_profit)),
+            stop_loss=StopLossRequest(stop_price=round_to_valid_tick(prices.stop_loss)),
         )
         try:
             return self._client.submit_order(order_request)
@@ -173,12 +181,17 @@ class OrderExecutor:
         ist dann bereits unter den berechneten Stop-Preis gefallen, eine
         weitere Stop-Order waere sinnlos.
         """
+        # round_to_valid_tick() defensiv hier, unabhaengig davon, ob der
+        # Aufrufer (bot._check_position_protection) selbst schon gerundet
+        # hat -- genau ein ungerundeter Wert hier hat den urspruenglichen
+        # Bug ausgeloest (Puffer-Berechnung `aktueller_kurs * 0.999` ergab
+        # 354.62502, von Alpaca abgelehnt).
         order_request = StopOrderRequest(
             symbol=symbol,
             qty=qty,
             side=OrderSide.SELL,
             time_in_force=TimeInForce.GTC,
-            stop_price=stop_price,
+            stop_price=round_to_valid_tick(stop_price),
         )
         try:
             return self._client.submit_order(order_request)

@@ -23,7 +23,7 @@ from trading_bot.config import Config
 from trading_bot.data_feed import MarketDataFeed
 from trading_bot.notifier import TradeFailureNotifier
 from trading_bot.order_executor import OrderExecutionError, OrderExecutor, StopPriceAlreadyBreachedError
-from trading_bot.risk_manager import RiskManager
+from trading_bot.risk_manager import RiskManager, round_to_valid_tick
 from trading_bot.strategy import (
     Action,
     combine_with_pattern_signal,
@@ -231,6 +231,23 @@ class TradingBot:
             summary += f", {counts['ERROR']} ERROR"
         logger.info("Scan complete: %s (duration: %.1fs)", summary, elapsed)
 
+    @staticmethod
+    def _positive_float(value, default: float) -> float:
+        """Wandelt ein Alpaca-Positionsfeld (kommt als String) in float um,
+        mit Fallback auf `default` -- aber NICHT per `value or default`,
+        denn ein nicht-leerer String wie "0" ist in Python truthy, `or`
+        wuerde den Fallback also NIE verwenden, selbst wenn der geparste
+        Wert tatsaechlich 0 ist. Genau das hat zuvor dazu gefuehrt, dass
+        `qty_available="0"` als qty=0 an submit_protective_stop_loss ging
+        (Alpaca: "qty must be > 0"), obwohl die Position noch offen war
+        und `qty` (die Gesamtmenge) als Fallback haette greifen sollen.
+        """
+        try:
+            parsed = float(value) if value is not None else 0.0
+        except (TypeError, ValueError):
+            parsed = 0.0
+        return parsed if parsed > 0 else default
+
     def _check_position_protection(self, positions: dict) -> None:
         """Sicherheitsnetz: prueft bei jedem Zyklus, ob jede offene Position
         noch eine aktive Stop-Loss-Order hat. Alpaca kann beide Bracket-Legs
@@ -241,15 +258,27 @@ class TradingBot:
         weiter, ohne dass das sonst irgendwo auffaellt. Legt bei Bedarf
         automatisch eine neue Stop-Loss-Order nach und alarmiert per Telegram.
 
-        Zwei Sonderfaelle, die neben dem einfachen "Stop nachlegen"-Pfad
-        behandelt werden:
+        Sonderfaelle neben dem einfachen "Stop nachlegen"-Pfad:
+        - Position mit Menge <= 0 ("Phantom-Position"): wird VOR dem
+          eigentlichen Pruef-Loop komplett rausgefiltert, ganz ohne
+          API-Aufruf fuer sie (siehe _positive_float's Docstring fuer den
+          verwandten, aber separaten Bug, der frueher qty_available="0"
+          betraf -- DIESER Filter hier prueft die Gesamtmenge `qty`, nicht
+          `qty_available`, und war fuer sich genommen bereits korrekt).
+        - Die Stop-Preis-Berechnung selbst schlaegt fehl (z.B. unerwartete/
+          fehlende Positionsdaten): eigener try/except NUR um die
+          Berechnung, damit ein Fehler hier klar als "Berechnung
+          fehlgeschlagen" gemeldet wird -- und NICHT stillschweigend in
+          einen der spaeteren Erfolgspfade durchrutscht.
         - Der Kurs ist bereits unter den berechneten Stop-Preis gefallen ->
           Alpaca lehnt die neue Stop-Order ab (StopPriceAlreadyBreachedError).
-          Statt es dabei zu belassen, wird die Position sofort per Market-
-          Sell geschlossen; schlaegt das ebenfalls fehl, gibt es einen
-          eigenen "KRITISCH"-Alert statt der normalen Warnung.
-        - Position mit Menge 0 ("Phantom-Position"): wird VOR dem eigentlichen
-          Pruef-Loop komplett rausgefiltert, ganz ohne API-Aufruf fuer sie.
+          Die Position wird dann per Market-Sell geschlossen -- der
+          "geschlossen"-Log/-Alert wird aber erst geschrieben, NACHDEM
+          close_position() tatsaechlich eine von Alpaca angenommene Order
+          zurueckgegeben hat (kein Fehler = Alpaca hat akzeptiert), nicht
+          schon dafuer, dass der Code-Pfad erreicht wurde. Schlaegt auch
+          der Market-Sell fehl, gibt es einen eigenen "KRITISCH"-Alert
+          statt der normalen Warnung.
         """
         to_check, phantom_symbols = {}, []
         for symbol, position in positions.items():
@@ -281,13 +310,24 @@ class TradingBot:
                 logger.error("Konnte Stop-Loss-Status fuer %s nicht pruefen: %s", symbol, exc)
                 continue
 
-            qty = float(getattr(position, "qty_available", None) or position.qty)
-            entry_price = float(position.avg_entry_price)
-            intended_stop = self._risk_manager.calculate_bracket_prices(entry_price).stop_loss
-
-            current_price = float(getattr(position, "current_price", None) or entry_price)
-            max_valid_stop = current_price * (1 - self._PROTECTIVE_STOP_BUFFER_PCT / 100)
-            stop_price = min(intended_stop, max_valid_stop)
+            try:
+                qty = self._positive_float(getattr(position, "qty_available", None), default=float(position.qty))
+                entry_price = float(position.avg_entry_price)
+                current_price = self._positive_float(getattr(position, "current_price", None), default=entry_price)
+                intended_stop = self._risk_manager.calculate_bracket_prices(entry_price).stop_loss
+                max_valid_stop = current_price * (1 - self._PROTECTIVE_STOP_BUFFER_PCT / 100)
+                stop_price = round_to_valid_tick(min(intended_stop, max_valid_stop))
+            except Exception as exc:
+                detail = f"Stop-Preis-Berechnung fuer {symbol} fehlgeschlagen: {exc}"
+                logger.critical(
+                    "KRITISCH: %s bleibt UNGESCHUETZT -- Stop-Preis-Berechnung fehlgeschlagen, kein "
+                    "Nachlege- oder Market-Sell-Versuch unternommen: %s",
+                    symbol,
+                    exc,
+                )
+                self._failure_notifier.notify_unprotected_position(symbol, detail, critical=True)
+                self._trade_logger.log(symbol=symbol, action="ALERT", reason=detail, status="critical")
+                continue
 
             detail = f"Position: {qty:g} Stk. @ Entry {entry_price:.2f}."
             logger.warning(
@@ -299,8 +339,6 @@ class TradingBot:
             )
             try:
                 self._executor.submit_protective_stop_loss(symbol, qty, stop_price)
-                detail += f" Neue Stop-Loss-Order @ {stop_price:.2f} automatisch nachgelegt."
-                logger.info("Stop-Loss fuer %s @ %.2f erfolgreich nachgelegt.", symbol, stop_price)
             except StopPriceAlreadyBreachedError as exc:
                 logger.warning(
                     "%s: Stop-Preis bereits vom aktuellen Kurs durchbrochen (%s) -- schliesse Position "
@@ -309,9 +347,7 @@ class TradingBot:
                     exc,
                 )
                 try:
-                    self._executor.close_position(symbol)
-                    detail += f" Stop-Preis war bereits durchbrochen -> Position sofort per Market-Sell geschlossen ({exc})."
-                    logger.info("%s per Market-Sell geschlossen (Stop-Preis war bereits durchbrochen).", symbol)
+                    closed_order = self._executor.close_position(symbol)
                 except OrderExecutionError as close_exc:
                     detail += (
                         f" KRITISCH: Stop-Preis bereits durchbrochen UND automatischer Market-Sell "
@@ -326,9 +362,27 @@ class TradingBot:
                     self._failure_notifier.notify_unprotected_position(symbol, detail, critical=True)
                     self._trade_logger.log(symbol=symbol, action="ALERT", reason=detail, status="critical")
                     continue
+                # Nur hier angekommen, wenn close_position() ohne Fehler
+                # eine von Alpaca angenommene Order zurueckgegeben hat --
+                # der "geschlossen"-Erfolg wird also durch die tatsaechliche
+                # Order-Response belegt (Order-ID + Status), nicht bloss
+                # dadurch, dass dieser Code-Pfad erreicht wurde.
+                detail += (
+                    f" Stop-Preis war bereits durchbrochen -> Position per Market-Sell geschlossen "
+                    f"(Order {closed_order.id}, Status {closed_order.status})."
+                )
+                logger.info(
+                    "%s per Market-Sell geschlossen (Stop-Preis war bereits durchbrochen; Order-ID %s, Status %s).",
+                    symbol,
+                    closed_order.id,
+                    closed_order.status,
+                )
             except OrderExecutionError as exc:
                 detail += f" AUTOMATISCHES NACHLEGEN FEHLGESCHLAGEN: {exc}"
                 logger.error("Konnte Stop-Loss fuer %s NICHT automatisch nachlegen: %s", symbol, exc)
+            else:
+                detail += f" Neue Stop-Loss-Order @ {stop_price:.2f} automatisch nachgelegt."
+                logger.info("Stop-Loss fuer %s @ %.2f erfolgreich nachgelegt.", symbol, stop_price)
 
             self._failure_notifier.notify_unprotected_position(symbol, detail)
             self._trade_logger.log(symbol=symbol, action="ALERT", reason=detail, status="warning")

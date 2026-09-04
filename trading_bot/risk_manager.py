@@ -11,6 +11,22 @@ from datetime import date
 from trading_bot.config import Config
 
 
+def round_to_valid_tick(price: float) -> float:
+    """Rundet einen Preis auf Alpacas gueltiges minimales Preis-Inkrement
+    (SEC Reg NMS Rule 612, die "Sub-Penny Rule", von Alpaca durchgesetzt --
+    eine Verletzung liefert den Fehler "sub-penny increment does not
+    fulfill minimum pricing criteria"): Preise >= $1 muessen in Ein-Cent-
+    Schritten vorliegen (2 Nachkommastellen), Preise < $1 in Schritten von
+    $0.0001 (4 Nachkommastellen).
+
+    Zentrale Stelle fuer diese Regel -- JEDER Preis, der als limit_price
+    oder stop_price an Alpaca geschickt wird, muss hier durch, egal wo er
+    berechnet wird (Bracket-Order-Preise, nachgelegte Schutz-Stop-Loss-
+    Order, ein etwaiger zukuenftiger weiterer Preis-Berechnungspfad).
+    """
+    return round(price, 2) if price >= 1.0 else round(price, 4)
+
+
 @dataclass
 class BracketPrices:
     stop_loss: float
@@ -55,6 +71,6 @@ class RiskManager:
         return max(qty, 0)
 
     def calculate_bracket_prices(self, entry_price: float) -> BracketPrices:
-        stop_loss = round(entry_price * (1 - self._config.stop_loss_pct / 100), 2)
-        take_profit = round(entry_price * (1 + self._config.take_profit_pct / 100), 2)
+        stop_loss = round_to_valid_tick(entry_price * (1 - self._config.stop_loss_pct / 100))
+        take_profit = round_to_valid_tick(entry_price * (1 + self._config.take_profit_pct / 100))
         return BracketPrices(stop_loss=stop_loss, take_profit=take_profit)

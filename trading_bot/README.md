@@ -267,14 +267,22 @@ eindeutig zuordnen:
   ```
   Starting independent safety-check thread (interval=300s / 5.0 min).
   [SafetyCheck] Independent safety-check thread started (interval=300s).
+  [SafetyCheck] Markt geschlossen, Durchlauf uebersprungen.
+  [SafetyCheck] Durchlauf abgeschlossen: keine offenen Positionen zu pruefen.
   [SafetyCheck] Durchlauf abgeschlossen: 26 Position(en) geprueft, alle geschuetzt.
   [SafetyCheck] TIMEOUT/Netzwerkfehler beim Abfragen der offenen Positionen (...) -- dieser Durchlauf wird uebersprungen, naechster Versuch in 300s.
   [SafetyCheck] Could not fetch open positions: ...
   ```
-  Die "Durchlauf abgeschlossen"-Zeile kommt bei JEDEM Intervall, auch wenn
+  Jeder moegliche Ausgang eines Durchlaufs (siehe `run_safety_check_once`'s
+  Docstring in `bot.py` fuer die vollstaendige Liste) hinterlaesst genau
+  eine dieser Zeilen -- auch "Markt geschlossen" oder "keine offenen
+  Positionen", die urspruenglich komplett stumm durchgerutscht sind und
+  ueber einen Feiertag/nach Handelsschluss so aussahen wie ein
+  haengengebliebener Thread. Die "Durchlauf abgeschlossen"-Zeilen kommen
+  bei JEDEM Intervall mit erfolgreichem Marktstatus-Check, auch wenn
   alles in Ordnung ist -- gedacht als Lebenszeichen, damit im Log immer
   erkennbar ist, ob der Thread noch laeuft (siehe "Netzwerk-Timeouts"
-  unten fuer den Hintergrund).
+  unten fuer den Hintergrund zu den TIMEOUT-Zeilen).
 - Die eigentlichen Befunde des Checks (`_check_position_protection`) haben
   kein eigenes Prefix, sind aber allein am Inhalt zweifelsfrei zuzuordnen --
   diese Formulierungen kommen aus keinem anderen Codepfad:

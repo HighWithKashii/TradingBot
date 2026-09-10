@@ -231,9 +231,24 @@ class TradingBot:
         gezaehlt als "ein Durchlauf ist fehlgeschlagen", aber der Thread
         selbst (und damit der naechste reguläre Intervall-Durchlauf)
         laeuft unveraendert weiter.
+
+        JEDER moegliche Ausgang dieser Methode hinterlaesst eine eigene
+        [SafetyCheck]-Log-Zeile, egal wie fruh sie zurueckkehrt -- vorher
+        konnte z.B. "Markt geschlossen" (is_market_open() == False)
+        komplett stumm durchrutschen, was ueber mehrere Intervalle hinweg
+        wie ein haengender Thread aussah, obwohl der Check schlicht
+        korrekt uebersprungen wurde. Siehe die Liste der Codepfade unten:
+        - Markt geschlossen -> "Markt geschlossen, Durchlauf uebersprungen."
+        - Market-Clock-Abfrage schlaegt fehl (API-Fehler oder Timeout)
+        - get_all_positions() schlaegt fehl (API-Fehler oder Timeout)
+        - _check_position_protection() schlaegt mit Timeout fehl
+        - Erfolgreicher Durchlauf mit 0 offenen Positionen
+        - Erfolgreicher Durchlauf, alle Positionen geschuetzt
+        - Erfolgreicher Durchlauf, mindestens eine Position mit ALERT
         """
         try:
             if not self._data_feed.is_market_open():
+                logger.info("[SafetyCheck] Markt geschlossen, Durchlauf uebersprungen.")
                 return
         except OrderExecutionError as exc:
             logger.error("[SafetyCheck] Could not check market clock: %s", exc)
@@ -273,11 +288,21 @@ class TradingBot:
             )
             return
 
-        # "Lebenszeichen"-Log: soll bei JEDEM Intervall erscheinen, auch
-        # wenn alle Positionen geschuetzt sind -- ohne das war bisher nicht
+        # "Lebenszeichen"-Log: soll bei JEDEM Intervall erscheinen, egal was
+        # dieser Durchlauf ergeben hat -- ohne das war bisher nicht
         # erkennbar, ob der Thread zwischen "gestartet" und "haengt" ueberhaupt
-        # einen einzigen Durchlauf tatsaechlich beendet hat.
-        if alerted:
+        # einen einzigen Durchlauf tatsaechlich beendet hat (siehe auch die
+        # fruehen returns oben: Marktstatus/API-Fehler/Timeout -- JEDER
+        # moegliche Ausgang dieser Methode hinterlaesst eine eigene,
+        # eindeutig zuordenbare Zeile, keiner rutscht mehr stumm durch).
+        if checked == 0:
+            # Eigener Fall statt in die "alle geschuetzt"-Zeile unten zu
+            # fallen: 0 Positionen bedeutet nicht "0 geprueft und fuer gut
+            # befunden", sondern schlicht "nichts zu tun" -- das sollte im
+            # Log nicht wie ein normaler, aussagekraeftiger Pruef-Durchlauf
+            # aussehen.
+            logger.info("[SafetyCheck] Durchlauf abgeschlossen: keine offenen Positionen zu pruefen.")
+        elif alerted:
             logger.warning(
                 "[SafetyCheck] Durchlauf abgeschlossen: %d Position(en) geprueft, %d mit ALERT.",
                 checked,

@@ -29,6 +29,7 @@ from alpaca.trading.client import TradingClient
 from alpaca.trading.models import Clock
 
 from trading_bot.config import Config
+from trading_bot.order_executor import apply_default_request_timeout
 
 logger = logging.getLogger("trading_bot")
 
@@ -97,6 +98,14 @@ class MarketDataFeed:
         self._trading_client = trading_client or TradingClient(
             config.api_key, config.secret_key, paper=config.paper
         )
+        # Nur wenn wir den Client selbst gebaut haben -- ein evtl. von
+        # aussen injizierter trading_client (siehe Tests) wird nicht
+        # angefasst. Siehe apply_default_request_timeout()'s Docstring
+        # in order_executor.py fuer den Grund (kein eingebautes Timeout in
+        # alpaca-py, is_market_open() wird u.a. vom unabhaengigen
+        # Sicherheits-Check-Thread aufgerufen und darf nie unbegrenzt haengen).
+        if trading_client is None:
+            apply_default_request_timeout(self._trading_client)
         self._timeframe = parse_timeframe(config.timeframe)
 
     def get_bars(self, symbol: str, limit: int) -> pd.DataFrame:

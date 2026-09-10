@@ -121,6 +121,17 @@ class TradeFailureNotifier:
         message = f"{prefix}: {symbol} hat aktuell KEINEN aktiven Stop-Loss! {detail}"
         self._send_throttled(throttle_key, message, suppressed_label=suppressed_label)
 
+    def notify_critical(self, subject: str, detail: str) -> None:
+        """Generischer KRITISCH-Alarm fuer System-/Infrastruktur-Fehler, die
+        nicht an eine einzelne Order oder Position gebunden sind (z.B. der
+        unabhaengige Sicherheits-Check-Thread ist unerwartet komplett
+        gestorben) -- im Zweifel gefaehrlicher als eine einzelne
+        fehlgeschlagene Order, weil ohne diesen Alarm niemand merkt, dass
+        der Schutzmechanismus selbst weg ist.
+        """
+        message = f"KRITISCH: {subject}: {detail}"
+        self._send_throttled(f"system:{subject}", message, suppressed_label="weitere gleichartige kritische Meldungen")
+
     def _send_throttled(self, throttle_key: str, message: str, suppressed_label: str) -> None:
         now = time.monotonic()
 

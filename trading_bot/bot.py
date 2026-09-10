@@ -19,6 +19,7 @@ import time
 from datetime import datetime, timezone
 
 import pandas as pd
+import requests
 
 from trading_bot.config import Config
 from trading_bot.data_feed import MarketDataFeed
@@ -214,6 +215,22 @@ class TradingBot:
         Check auch bei 5-Minuten-Intervall auf dem Pi Zero (ein Kern)
         leichtgewichtig bleibt. Wird sowohl vom Hintergrund-Thread
         (_run_safety_check_loop) als auch direkt aus Tests aufgerufen.
+
+        Jeder Alpaca-Call, den dieser Pfad ausloest (Market-Clock,
+        get_all_positions, und alles innerhalb von
+        _check_position_protection wie get_open_orders/submit/cancel), hat
+        seit order_executor.apply_default_request_timeout() ein hartes
+        Timeout -- ohne das koennte ein haengender Request (z.B. ein
+        Tailscale-Aussetzer, der Pakete kommentarlos verschluckt statt sie
+        abzulehnen) diesen Thread fuer immer blockieren, ganz ohne
+        Exception oder Log-Eintrag. Genau das ist der Bug, der hier
+        behoben wird -- ein Timeout aeussert sich als
+        requests.exceptions.RequestException (Timeout ist eine
+        Unterklasse davon) und wird hier explizit und LAUT behandelt,
+        statt den ganzen Durchlauf schweigend abzubrechen: geloggt,
+        gezaehlt als "ein Durchlauf ist fehlgeschlagen", aber der Thread
+        selbst (und damit der naechste reguläre Intervall-Durchlauf)
+        laeuft unveraendert weiter.
         """
         try:
             if not self._data_feed.is_market_open():
@@ -221,14 +238,56 @@ class TradingBot:
         except OrderExecutionError as exc:
             logger.error("[SafetyCheck] Could not check market clock: %s", exc)
             return
+        except requests.exceptions.RequestException as exc:
+            logger.error(
+                "[SafetyCheck] TIMEOUT/Netzwerkfehler beim Abfragen der Market-Clock (%s) -- "
+                "dieser Durchlauf wird uebersprungen, naechster Versuch in %.0fs.",
+                exc,
+                self._config.safety_check_interval_seconds,
+            )
+            return
 
         try:
             positions = self._executor.get_all_positions()
         except OrderExecutionError as exc:
             logger.error("[SafetyCheck] Could not fetch open positions: %s", exc)
             return
+        except requests.exceptions.RequestException as exc:
+            logger.error(
+                "[SafetyCheck] TIMEOUT/Netzwerkfehler beim Abfragen der offenen Positionen (%s) -- "
+                "dieser Durchlauf wird uebersprungen, naechster Versuch in %.0fs.",
+                exc,
+                self._config.safety_check_interval_seconds,
+            )
+            return
 
-        self._check_position_protection(positions)
+        try:
+            checked, alerted = self._check_position_protection(positions)
+        except requests.exceptions.RequestException as exc:
+            logger.error(
+                "[SafetyCheck] TIMEOUT/Netzwerkfehler waehrend der Stop-Loss-Pruefung (%s) -- "
+                "dieser Durchlauf wird abgebrochen, naechster Versuch in %.0fs. Bereits gepruefte "
+                "Positionen in diesem Durchlauf sind davon nicht betroffen.",
+                exc,
+                self._config.safety_check_interval_seconds,
+            )
+            return
+
+        # "Lebenszeichen"-Log: soll bei JEDEM Intervall erscheinen, auch
+        # wenn alle Positionen geschuetzt sind -- ohne das war bisher nicht
+        # erkennbar, ob der Thread zwischen "gestartet" und "haengt" ueberhaupt
+        # einen einzigen Durchlauf tatsaechlich beendet hat.
+        if alerted:
+            logger.warning(
+                "[SafetyCheck] Durchlauf abgeschlossen: %d Position(en) geprueft, %d mit ALERT.",
+                checked,
+                alerted,
+            )
+        else:
+            logger.info(
+                "[SafetyCheck] Durchlauf abgeschlossen: %d Position(en) geprueft, alle geschuetzt.",
+                checked,
+            )
 
     def _run_safety_check_loop(self) -> None:
         """Laeuft als eigener Daemon-Thread (siehe run_forever) komplett
@@ -236,17 +295,41 @@ class TradingBot:
         statt time.sleep(...), damit stop() den Thread sofort aufwecken
         kann, statt bis zu SAFETY_CHECK_INTERVAL_SECONDS auf den naechsten
         Sleep-Ablauf warten zu muessen (relevant fuer Tests).
+
+        Die AEUSSERE try/except um die gesamte Schleife ist die letzte
+        Verteidigungslinie: sie faengt nur das ab, was die innere
+        Pro-Durchlauf-Behandlung (siehe run_safety_check_once) NICHT schon
+        abgefangen hat -- z.B. ein Fehler in _stop_event.wait() selbst.
+        Stirbt der Thread trotzdem komplett, ist das ein stummer
+        Totalausfall des Sicherheitsnetzes (gefaehrlicher als gar kein
+        Sicherheits-Check, weil niemand merkt, dass er fehlt) und wird
+        deshalb laut als KRITISCH geloggt UND per Telegram gemeldet, bevor
+        der Thread tatsaechlich endet.
         """
         interval = self._config.safety_check_interval_seconds
         logger.info("[SafetyCheck] Independent safety-check thread started (interval=%.0fs).", interval)
-        while not self._stop_event.is_set():
-            try:
-                self.run_safety_check_once()
-            except Exception:
-                logger.exception("[SafetyCheck] Unexpected error during safety check")
-            if self._stop_event.wait(interval):
-                break
-        logger.info("[SafetyCheck] Safety-check thread stopped.")
+        try:
+            while not self._stop_event.is_set():
+                try:
+                    self.run_safety_check_once()
+                except Exception:
+                    logger.exception("[SafetyCheck] Unexpected error during safety check")
+                if self._stop_event.wait(interval):
+                    break
+            logger.info("[SafetyCheck] Safety-check thread stopped.")
+        except Exception as exc:
+            logger.critical(
+                "[SafetyCheck] KRITISCH: Sicherheits-Check-Thread ist unerwartet komplett gestorben -- "
+                "offene Positionen werden ab sofort NICHT mehr automatisch auf fehlenden Stop-Loss "
+                "geprueft, bis der Bot neugestartet wird! Fehler: %s",
+                exc,
+                exc_info=True,
+            )
+            self._failure_notifier.notify_critical(
+                "SafetyCheck-Thread gestorben",
+                f"Der unabhaengige Stop-Loss-Sicherheits-Check laeuft NICHT mehr, offene Positionen "
+                f"werden bis zum naechsten Bot-Neustart nicht mehr automatisch geprueft. Fehler: {exc}",
+            )
 
     def run_cycle(self) -> None:
         cycle_start = time.monotonic()
@@ -371,7 +454,7 @@ class TradingBot:
         )
         return detail
 
-    def _check_position_protection(self, positions: dict) -> None:
+    def _check_position_protection(self, positions: dict) -> tuple[int, int]:
         """Sicherheitsnetz: prueft bei jedem Durchlauf des unabhaengigen
         Sicherheits-Check-Threads (siehe run_safety_check_once, Standard
         alle 5 Minuten -- SAFETY_CHECK_INTERVAL_SECONDS), ob jede offene
@@ -417,7 +500,14 @@ class TradingBot:
           schon dafuer, dass der Code-Pfad erreicht wurde. Schlaegt auch
           der Market-Sell fehl, gibt es einen eigenen "KRITISCH"-Alert
           statt der normalen Warnung.
+
+        Gibt (checked, alerted) zurueck -- Anzahl tatsaechlich gepruefter
+        Positionen (Phantom-Positionen ausgenommen) und Anzahl davon, fuer
+        die ein ALERT (WARNUNG oder KRITISCH) ausgeloest wurde. Nur fuer
+        das "Lebenszeichen"-Log in run_safety_check_once() gedacht, sonst
+        von niemandem ausgewertet.
         """
+        alerted = 0
         to_check, phantom_symbols = {}, []
         for symbol, position in positions.items():
             if float(position.qty) <= 0:
@@ -465,6 +555,7 @@ class TradingBot:
                 )
                 self._failure_notifier.notify_unprotected_position(symbol, detail, critical=True)
                 self._trade_logger.log(symbol=symbol, action="ALERT", reason=detail, status="critical")
+                alerted += 1
                 continue
 
             detail = f"Position: {qty:g} Stk. @ Entry {entry_price:.2f}."
@@ -476,9 +567,18 @@ class TradingBot:
                 continue
 
             if blocking_orders:
+                # _repair_blocked_position loest auf JEDEM ihrer Pfade genau
+                # einen ALERT aus (erfolgreiche Reparatur, unklare Order,
+                # fehlgeschlagene Stornierung) -- daher hier schon zaehlen.
                 self._repair_blocked_position(symbol, position, blocking_orders, stop_price, bracket_prices, detail)
+                alerted += 1
                 continue
 
+            # Ab hier fuehrt jeder Pfad (Stop nachgelegt, Nachlegen
+            # fehlgeschlagen, oder Market-Sell-Fallback nach durchbrochenem
+            # Stop-Preis) zu genau einem ALERT -- entweder unten oder schon
+            # innerhalb von _market_sell_fallback.
+            alerted += 1
             logger.warning(
                 f"{Fore.RED}UNGESCHUETZTE POSITION: %s (%.0f Stk.) hat keine aktive Stop-Loss-Order! "
                 f"Versuche, automatisch eine neue @ %.2f nachzulegen.{Style.RESET_ALL}",
@@ -507,6 +607,8 @@ class TradingBot:
 
             self._failure_notifier.notify_unprotected_position(symbol, detail)
             self._trade_logger.log(symbol=symbol, action="ALERT", reason=detail, status="warning")
+
+        return len(to_check), alerted
 
     def _repair_blocked_position(
         self, symbol: str, position, blocking_orders: list, stop_price: float, bracket_prices: BracketPrices, detail: str

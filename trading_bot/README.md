@@ -224,6 +224,7 @@ PATTERN AAPL: BULLISH conf=0.79 (trendline_breakout_up) — Ausbruch ueber Abwae
 - **Bracket- vs. OCO-Legs:** Alpaca kann die beiden Legs einer Multi-Leg-Order (Bracket beim Entry, OCO beim nachtraeglichen Exit-Paar) je nach Abfrage entweder als zwei eigenstaendige flache Eintraege ODER zusammengerollt im `.legs`-Feld der Parent-Order zurueckgeben. `OrderExecutor.get_open_orders()` fragt deshalb bewusst mit `nested=True` ab und raeumt das Ergebnis ueber `_flatten_order_legs()` zu einer flachen Liste auf, in der jedes Leg (Parent und Kinder) einzeln auftaucht -- das ist die einzige Stelle dafuer, sowohl `has_active_stop_loss()` als auch der Portfolio-Scan und die Reparaturlogik in `bot.py` bauen direkt darauf auf.
 - **Einmaliger Portfolio-Scan (rein lesend, keine Aenderungen):** `python -m trading_bot.scan_position_protection` geht einmalig ueber alle offenen Positionen und meldet fuer jede, ob sie geschuetzt ist und falls nicht, ob (und welche) blockierende Order dahinter steckt -- gedacht, um vor dem produktiven Einsatz der obigen Reparaturlogik zu sehen, wie viele Positionen im Portfolio tatsaechlich betroffen sind.
 - **Tagesverlust-Limit:** sobald der realisierte Tagesverlust `MAX_DAILY_LOSS_PCT` % des Start-Equity des Tages ueberschreitet, werden fuer den Rest des Tages keine neuen Positionen mehr eroeffnet (offene Positionen bleiben durch ihre Bracket-Orders abgesichert).
+- **Netzwerk-Timeouts (wichtig auf instabilen Verbindungen wie Tailscale auf dem Pi Zero):** alpaca-py bietet selbst KEIN Timeout an (weder im Konstruktor noch sonstwo) und wartet ohne eigenes Zutun unbegrenzt auf eine Antwort -- eine Verbindung, die Pakete kommentarlos verschluckt statt sie abzulehnen (z.B. ein Tailscale-Aussetzer), haengt sonst fuer immer, ganz ohne Exception oder Log-Eintrag (genau das hat einmal den Sicherheits-Check-Thread lautlos lahmgelegt). `order_executor.apply_default_request_timeout()` erzwingt deshalb per Monkeypatch auf `requests.Session` (den einzigen verfuegbaren Hebel) ein hartes `(connect=10s, read=20s)`-Timeout fuer JEDEN HTTP-Request beider `TradingClient`-Instanzen (Order-Ausfuehrung und Markt-Uhrzeit) -- worst case haengt ein einzelner Call also maximal ~30s statt ewig, danach kommt eine `requests.exceptions.RequestException`, die als `[SafetyCheck] TIMEOUT/Netzwerkfehler ...` geloggt wird; der naechste reguläre Intervall-Durchlauf findet trotzdem normal statt. Stirbt der Sicherheits-Check-Thread trotzdem komplett (unerwartete, nicht abgefangene Exception), wird das als KRITISCH geloggt und per Telegram gemeldet -- ein stiller toter Sicherheits-Check waere gefaehrlicher als gar keiner.
 
 ## Logging
 
@@ -261,13 +262,19 @@ Beide laufen in getrennten Threads (siehe "Risikomanagement" oben), landen
 aber im selben Logger/derselben Konsole. So lassen sich die Zeilen trotzdem
 eindeutig zuordnen:
 
-- Alles rund um Thread-Start/-Stop und Fehler *im Sicherheits-Check selbst*
-  ist mit `[SafetyCheck]` prefixed, z.B.
+- Alles rund um Thread-Start/-Stop, Lebenszeichen und Fehler *im
+  Sicherheits-Check selbst* ist mit `[SafetyCheck]` prefixed, z.B.
   ```
   Starting independent safety-check thread (interval=300s / 5.0 min).
   [SafetyCheck] Independent safety-check thread started (interval=300s).
+  [SafetyCheck] Durchlauf abgeschlossen: 26 Position(en) geprueft, alle geschuetzt.
+  [SafetyCheck] TIMEOUT/Netzwerkfehler beim Abfragen der offenen Positionen (...) -- dieser Durchlauf wird uebersprungen, naechster Versuch in 300s.
   [SafetyCheck] Could not fetch open positions: ...
   ```
+  Die "Durchlauf abgeschlossen"-Zeile kommt bei JEDEM Intervall, auch wenn
+  alles in Ordnung ist -- gedacht als Lebenszeichen, damit im Log immer
+  erkennbar ist, ob der Thread noch laeuft (siehe "Netzwerk-Timeouts"
+  unten fuer den Hintergrund).
 - Die eigentlichen Befunde des Checks (`_check_position_protection`) haben
   kein eigenes Prefix, sind aber allein am Inhalt zweifelsfrei zuzuordnen --
   diese Formulierungen kommen aus keinem anderen Codepfad:

@@ -34,6 +34,51 @@ from trading_bot.risk_manager import BracketPrices, round_to_valid_tick
 
 logger = logging.getLogger("trading_bot")
 
+# (connect_timeout, read_timeout) in Sekunden fuer JEDEN HTTP-Request an
+# Alpaca -- siehe apply_default_request_timeout() weiter unten fuer den
+# Grund, warum das per Monkeypatch statt eines Konstruktor-Parameters
+# passiert (alpaca-py bietet keinen an).
+DEFAULT_ALPACA_REQUEST_TIMEOUT = (10.0, 20.0)
+
+
+def apply_default_request_timeout(client, timeout: tuple[float, float] = DEFAULT_ALPACA_REQUEST_TIMEOUT) -> None:
+    """Erzwingt ein hartes Timeout fuer jeden HTTP-Request eines
+    alpaca-py-Clients (TradingClient, StockHistoricalDataClient, ...).
+
+    alpaca-py's RESTClient-Basisklasse hat KEINEN timeout-Parameter --
+    weder im Konstruktor noch sonstwo (gegen die installierte Version
+    geprueft: `inspect.signature(TradingClient.__init__)` /
+    `RESTClient.__init__` haben schlicht kein `timeout`-Argument). Intern
+    ruft sie nur `self._session.request(method, url, **opts)` auf einer
+    ganz normalen `requests.Session` auf, OHNE jemals `timeout=` zu setzen
+    -- und `requests` selbst wartet ohne explizites Timeout UNBEGRENZT auf
+    eine Antwort. Bei einem haengenden TCP-Handshake oder einer Verbindung,
+    die (z.B. durch einen Tailscale-Aussetzer) Pakete kommentarlos
+    verschluckt statt sie sauber mit RST abzulehnen, kommt so nie ein
+    Fehler zurueck -- der aufrufende Thread haengt fuer immer, ganz ohne
+    Exception, ohne Log-Eintrag, ohne Absturz. Genau das hat den
+    unabhaengigen Sicherheits-Check-Thread lahmgelegt (er lief nach dem
+    Start sauber an, aber ein einziger haengender Request danach hat ihn
+    fuer immer blockiert).
+
+    Da die Bibliothek selbst keinen Hebel dafuer anbietet, wird hier
+    stattdessen `requests`' EIGENER `timeout`-Parameter genutzt (kein
+    signal.alarm, kein separater Watchdog-Thread) -- indem `_session`
+    (technisch ein privates Attribut von alpaca-py, aber der einzige
+    verfuegbare Weg) einmalig so umgebaut wird, dass jeder Request ohne
+    explizites `timeout=` automatisch dieses Default-Timeout bekommt.
+    Bereits ein an eine Methode explizit uebergebenes `timeout=` (kommt in
+    diesem Projekt aktuell nirgends vor) wuerde weiterhin Vorrang haben.
+    """
+    session = client._session
+    original_request = session.request
+
+    def _request_with_default_timeout(method, url, **kwargs):
+        kwargs.setdefault("timeout", timeout)
+        return original_request(method, url, **kwargs)
+
+    session.request = _request_with_default_timeout
+
 
 def _is_stop_price_breached_error(exc: APIError) -> bool:
     """True, wenn eine APIError speziell Alpacas Fehlercode 42210000
@@ -120,6 +165,7 @@ class OrderExecutor:
         close_retry_backoff_seconds: float = 2.0,
     ):
         self._client = TradingClient(config.api_key, config.secret_key, paper=config.paper)
+        apply_default_request_timeout(self._client)
         # How long to wait for order-cancellation (esp. bracket SL/TP legs) to
         # actually clear before giving up and attempting close_position anyway.
         self._cancel_poll_attempts = cancel_poll_attempts

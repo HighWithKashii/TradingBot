@@ -14,6 +14,7 @@ of one line per symbol.
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from datetime import datetime, timezone
 
@@ -86,6 +87,13 @@ class TradingBot:
         # Gebrauch verworfen; siehe run_cycle() fuer die Freshness-Pruefung.
         self._prefetched_bars: dict[str, pd.DataFrame] | None = None
         self._prefetched_bars_at: float | None = None
+        # Unabhaengiger Sicherheits-Check (siehe run_safety_check_once /
+        # _run_safety_check_loop): laeuft in einem eigenen Daemon-Thread,
+        # getrennt vom 15-Minuten-Strategie-Scan in run_cycle(). _stop_event
+        # dient als unterbrechbarer "Sleep" (statt time.sleep) und als
+        # sauberer Stop-Mechanismus fuer Tests / stop().
+        self._stop_event = threading.Event()
+        self._safety_check_thread: threading.Thread | None = None
 
     def warm_up_with_backfill(self) -> None:
         """Laedt beim Start genug historische Bars pro Watchlist-Symbol vor,
@@ -162,6 +170,23 @@ class TradingBot:
             self.warm_up_with_backfill()
         except Exception:
             logger.exception("Backfill beim Start fehlgeschlagen -- Bot startet trotzdem, Indikatoren werden ueber die naechsten Live-Zyklen nachgesammelt.")
+
+        # Der Sicherheits-Check (offene Positionen auf aktives Stop-Loss
+        # pruefen) laeuft ab hier unabhaengig vom Strategie-Scan unten in
+        # einem eigenen Daemon-Thread -- siehe _run_safety_check_loop. Ein
+        # langsamer Scan (Backfill + 99 Symbole) blockiert ihn dadurch
+        # nicht, und umgekehrt verzoegert ein laufender Sicherheits-Check
+        # nie den Scan, weil beide komplett getrennte Python-Threads sind.
+        logger.info(
+            "Starting independent safety-check thread (interval=%.0fs / %.1f min).",
+            config.safety_check_interval_seconds,
+            config.safety_check_interval_seconds / 60,
+        )
+        self._safety_check_thread = threading.Thread(
+            target=self._run_safety_check_loop, name="safety-check", daemon=True
+        )
+        self._safety_check_thread.start()
+
         while True:
             try:
                 self.run_cycle()
@@ -170,6 +195,58 @@ class TradingBot:
             except Exception:
                 logger.exception("Unexpected error during trading cycle")
             time.sleep(self._config.check_interval_minutes * 60)
+
+    def stop(self) -> None:
+        """Signalisiert dem Sicherheits-Check-Thread zum Beenden und wartet
+        darauf (siehe _stop_event) -- fuer sauberes Shutdown in Tests; der
+        Haupt-Scan-Loop selbst (run_forever) hat aktuell keinen eigenen
+        Stop-Mechanismus, das war schon vor dieser Aenderung so.
+        """
+        self._stop_event.set()
+        if self._safety_check_thread is not None:
+            self._safety_check_thread.join(timeout=5)
+
+    def run_safety_check_once(self) -> None:
+        """Ein einzelner Durchlauf des unabhaengigen Sicherheits-Checks:
+        nur offene Positionen abfragen und pruefen, ob sie einen aktiven
+        Stop-Loss haben (siehe _check_position_protection) -- bewusst OHNE
+        Bars abzurufen oder Indikatoren neu zu berechnen, damit dieser
+        Check auch bei 5-Minuten-Intervall auf dem Pi Zero (ein Kern)
+        leichtgewichtig bleibt. Wird sowohl vom Hintergrund-Thread
+        (_run_safety_check_loop) als auch direkt aus Tests aufgerufen.
+        """
+        try:
+            if not self._data_feed.is_market_open():
+                return
+        except OrderExecutionError as exc:
+            logger.error("[SafetyCheck] Could not check market clock: %s", exc)
+            return
+
+        try:
+            positions = self._executor.get_all_positions()
+        except OrderExecutionError as exc:
+            logger.error("[SafetyCheck] Could not fetch open positions: %s", exc)
+            return
+
+        self._check_position_protection(positions)
+
+    def _run_safety_check_loop(self) -> None:
+        """Laeuft als eigener Daemon-Thread (siehe run_forever) komplett
+        parallel zum 15-Minuten-Strategie-Scan. Nutzt _stop_event.wait(...)
+        statt time.sleep(...), damit stop() den Thread sofort aufwecken
+        kann, statt bis zu SAFETY_CHECK_INTERVAL_SECONDS auf den naechsten
+        Sleep-Ablauf warten zu muessen (relevant fuer Tests).
+        """
+        interval = self._config.safety_check_interval_seconds
+        logger.info("[SafetyCheck] Independent safety-check thread started (interval=%.0fs).", interval)
+        while not self._stop_event.is_set():
+            try:
+                self.run_safety_check_once()
+            except Exception:
+                logger.exception("[SafetyCheck] Unexpected error during safety check")
+            if self._stop_event.wait(interval):
+                break
+        logger.info("[SafetyCheck] Safety-check thread stopped.")
 
     def run_cycle(self) -> None:
         cycle_start = time.monotonic()
@@ -207,7 +284,10 @@ class TradingBot:
             logger.error("Could not fetch open positions — skipping cycle: %s", exc)
             return
 
-        self._check_position_protection(positions)
+        # Der Sicherheits-Check (aktives Stop-Loss pruefen) laeuft seit
+        # dieser Aenderung NICHT mehr hier, sondern unabhaengig und
+        # haeufiger in einem eigenen Thread -- siehe run_safety_check_once
+        # und _run_safety_check_loop, gestartet in run_forever().
 
         # Erster Zyklus nach dem Start: die vom Backfill vorgeladenen Bars
         # wiederverwenden statt dieselben Daten nochmal abzurufen -- aber
@@ -292,8 +372,10 @@ class TradingBot:
         return detail
 
     def _check_position_protection(self, positions: dict) -> None:
-        """Sicherheitsnetz: prueft bei jedem Zyklus, ob jede offene Position
-        noch eine aktive Stop-Loss-Order hat. Alpaca kann beide Bracket-Legs
+        """Sicherheitsnetz: prueft bei jedem Durchlauf des unabhaengigen
+        Sicherheits-Check-Threads (siehe run_safety_check_once, Standard
+        alle 5 Minuten -- SAFETY_CHECK_INTERVAL_SECONDS), ob jede offene
+        Position noch eine aktive Stop-Loss-Order hat. Alpaca kann beide Bracket-Legs
         gleichzeitig verwerfen (z.B. eine am Handelsschluss nicht gefuellte
         Take-Profit-Limit-Order laeuft ab und storniert ueber die OCO-
         Verknuepfung automatisch auch den Stop-Loss) -- die Position liefe

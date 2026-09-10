@@ -92,6 +92,15 @@ class Config:
     check_interval_minutes: float = field(
         default_factory=lambda: _mode_default("CHECK_INTERVAL_MINUTES", "check_interval_minutes", float)
     )
+    # Wie oft der unabhaengige Sicherheits-Check (offene Positionen auf
+    # aktives Stop-Loss pruefen) laeuft -- getrennt vom Haupt-Scan-Intervall
+    # oben, weil der Sicherheits-Check zeitkritisch ist (Kurs kann zwischen
+    # zwei 15-Minuten-Scans deutlich weiter fallen als beabsichtigt) und
+    # bewusst haeufiger laufen soll. Nicht mode-aware -- 5 Minuten sind fuer
+    # beide TRADING_MODE-Varianten ein sinnvoller Default.
+    safety_check_interval_seconds: float = field(
+        default_factory=lambda: _get_float("SAFETY_CHECK_INTERVAL_SECONDS", 300.0)
+    )
 
     # Batching for the Nasdaq-100-sized watchlist (keeps requests/minute well
     # under Alpaca's rate limits instead of firing ~100 calls back to back)
@@ -193,6 +202,8 @@ class Config:
             raise ValueError("WATCHLIST must contain at least one symbol (or set USE_NASDAQ100=true).")
         if self.data_batch_size < 1:
             raise ValueError("DATA_BATCH_SIZE must be at least 1.")
+        if self.safety_check_interval_seconds <= 0:
+            raise ValueError("SAFETY_CHECK_INTERVAL_SECONDS must be greater than 0.")
         if self.sma_fast >= self.sma_slow:
             raise ValueError("SMA_FAST must be smaller than SMA_SLOW.")
         if self.macd_cross_lookback_bars < 1:

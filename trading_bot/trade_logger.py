@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import os
+import threading
 from dataclasses import dataclass, fields
 from datetime import datetime, timezone
 
@@ -26,6 +27,12 @@ class TradeLogger:
     def __init__(self, path: str):
         self._path = path
         self._fieldnames = [f.name for f in fields(TradeLogEntry)]
+        # Der Haupt-Scan und der unabhaengige Sicherheits-Check laufen in
+        # getrennten Threads und koennen beide gleichzeitig loggen (siehe
+        # bot.py) -- ohne Lock koennten zwei parallele Schreibzugriffe auf
+        # dieselbe CSV-Datei sich gegenseitig ueberschreiben oder Zeilen
+        # verstuemmeln.
+        self._lock = threading.Lock()
         if not os.path.exists(self._path) or os.path.getsize(self._path) == 0:
             with open(self._path, "w", newline="", encoding="utf-8") as f:
                 csv.DictWriter(f, fieldnames=self._fieldnames).writeheader()
@@ -54,5 +61,6 @@ class TradeLogger:
             order_id=order_id,
             status=status,
         )
-        with open(self._path, "a", newline="", encoding="utf-8") as f:
-            csv.DictWriter(f, fieldnames=self._fieldnames).writerow(entry.__dict__)
+        with self._lock:
+            with open(self._path, "a", newline="", encoding="utf-8") as f:
+                csv.DictWriter(f, fieldnames=self._fieldnames).writerow(entry.__dict__)

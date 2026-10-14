@@ -172,8 +172,21 @@ class Config:
     # Telegram-Benachrichtigung bei fehlgeschlagenen Trades (siehe notifier.py).
     # Komplett optional -- ohne Token/Chat-ID werden Fehlschlaege nur wie
     # bisher geloggt, es gibt keine Telegram-Nachricht und keinen Fehler.
+    #
+    # Zwei getrennte Ziele, EIN Bot (siehe notifier.TradeFailureNotifier fuer
+    # die Kanal-Zuordnung jeder Nachrichtenart):
+    # - telegram_chat_id_alerts: haeufige Routine-Meldungen (Order-Fehlschlaege,
+    #   automatisch nachgelegte Stop-Loss-Orders). TELEGRAM_CHAT_ID (alter
+    #   Variablenname) bleibt als Fallback gueltig, damit ein bestehendes
+    #   .env ohne Aenderung weiterlaeuft.
+    # - telegram_chat_id_status: seltene, wichtige Meldungen (jeder
+    #   KRITISCH-Alarm) -- bewusst ein eigener Kanal, damit so etwas nicht in
+    #   der Masse der Routine-Meldungen untergeht.
     telegram_bot_token: str = field(default_factory=lambda: os.getenv("TELEGRAM_BOT_TOKEN", ""))
-    telegram_chat_id: str = field(default_factory=lambda: os.getenv("TELEGRAM_CHAT_ID", ""))
+    telegram_chat_id_alerts: str = field(
+        default_factory=lambda: os.getenv("TELEGRAM_CHAT_ID_ALERTS", os.getenv("TELEGRAM_CHAT_ID", ""))
+    )
+    telegram_chat_id_status: str = field(default_factory=lambda: os.getenv("TELEGRAM_CHAT_ID_STATUS", ""))
 
     @property
     def watchlist(self) -> list[str]:

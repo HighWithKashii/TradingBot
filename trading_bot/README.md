@@ -219,7 +219,7 @@ PATTERN AAPL: BULLISH conf=0.79 (trendline_breakout_up) — Ausbruch ueber Abwae
 
 - **Positionsgroesse:** `POSITION_SIZE_PCT` % des Account-Equity pro Trade (nach oben durch verfuegbare Buying Power begrenzt).
 - **Stop-Loss / Take-Profit:** werden als Alpaca-Bracket-Order (OCO) direkt bei Orderaufgabe gesetzt (`STOP_LOSS_PCT` / `TAKE_PROFIT_PCT`), mit `time_in_force=GTC` (Good Till Canceled) statt `DAY` -- mit `DAY` liefe die Take-Profit-Limit-Order zum Handelsschluss ab, sobald sie nicht gefuellt wurde, und wegen der OCO-Verknuepfung storniert Alpaca dabei automatisch AUCH den Stop-Loss, sodass die Position komplett ungeschuetzt weiterlaeuft (genau das war ein realer Vorfall: PYPL/MRVL liefen dadurch tagelang schutzlos mit 10-15% statt der vorgesehenen ~2% Verlust). GTC ist fuer Bracket-Orders auf Aktien in der regulaeren Handelszeit unterstuetzt; nur bei `extended_hours=True` (nutzt dieser Bot nicht) verlangt Alpaca fuer den Entry `DAY` + Limit-Order, und Crypto unterstuetzt bei Alpaca ueberhaupt keine Bracket-/OCO-Orders (dieser Bot handelt ausschliesslich US-Aktien, betrifft ihn also nicht).
-- **Stop-Loss-Sicherheitsnetz:** laeuft unabhaengig vom Watchlist-Scan alle `SAFETY_CHECK_INTERVAL_SECONDS` Sekunden (Default 300 = 5 Minuten) in einem eigenen Hintergrund-Thread (siehe `TradingBot.run_safety_check_once` / `_run_safety_check_loop` in `bot.py`) und prueft fuer jede offene Position, ob tatsaechlich noch eine aktive Stop-Loss-Order existiert (`OrderExecutor.has_active_stop_loss`) -- unabhaengig von der Ursache eines fehlenden Stops. Bewusst als eigener Thread statt Teil des `CHECK_INTERVAL_MINUTES`-Zyklus: der Sicherheits-Check ist zeitkritisch (ein schnell fallender Kurs darf eine Position nicht erst nach bis zu `CHECK_INTERVAL_MINUTES` ungeschuetzt lassen), waehrend der Watchlist-Scan an die Kerzengroesse (`TIMEFRAME`) gebunden ist und deutlich laenger dauern kann (Backfill + Indikatoren fuer die ganze Watchlist) -- keiner der beiden Threads blockiert den anderen. Der Check selbst bleibt bewusst schlank (nur `get_all_positions`/`get_open_orders`, keine Bars, keine Indikator-Neuberechnung), relevant auf dem Pi Zero mit nur einem Kern. Fehlt ein Stop, wird das als WARNING geloggt, automatisch eine neue Stop-Loss-Order zum konfigurierten `STOP_LOSS_PCT` nachgelegt (mit kleinem Sicherheitspuffer unter dem aktuellen Kurs, nicht stur auf dem urspruenglichen Entry-Level -- sonst faellt eine knapp verzoegerte Neuanlage demselben Fehler zum Opfer), und (falls `TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID` gesetzt sind) sofort per Telegram alarmiert. Ist der Kurs bereits so schnell gefallen, dass selbst der gepufferte Stop-Preis von Alpaca abgelehnt wird ("stop price must be less than current price"), schliesst der Bot die Position sofort per Market-Sell -- der "geschlossen"-Log-Eintrag/-Alert wird dabei erst geschrieben, NACHDEM Alpaca die Order tatsaechlich bestaetigt hat (inkl. Order-ID/Status im Log), nicht schon dafuer, dass dieser Code-Pfad erreicht wurde. Scheitert auch der Market-Sell (oder schon die Stop-Preis-Berechnung selbst), gibt es einen eigenen, klar unterscheidbaren "KRITISCH"-Alert statt der normalen Warnung. Positionen mit Menge 0 (z.B. kurzzeitig nach einem gerade gefuellten Verkauf noch in `get_all_positions()` sichtbar) werden vor jeder Pruefung komplett uebersprungen, ganz ohne API-Aufruf. Jeder an Alpaca uebergebene Preis (Bracket-Order, nachgelegter Stop) laeuft durch `risk_manager.round_to_valid_tick()` -- Alpacas minimales Preis-Inkrement (SEC Reg NMS Rule 612): 2 Nachkommastellen bei Kursen >= $1, 4 bei Kursen darunter.
+- **Stop-Loss-Sicherheitsnetz:** laeuft unabhaengig vom Watchlist-Scan alle `SAFETY_CHECK_INTERVAL_SECONDS` Sekunden (Default 300 = 5 Minuten) in einem eigenen Hintergrund-Thread (siehe `TradingBot.run_safety_check_once` / `_run_safety_check_loop` in `bot.py`) und prueft fuer jede offene Position, ob tatsaechlich noch eine aktive Stop-Loss-Order existiert (`OrderExecutor.has_active_stop_loss`) -- unabhaengig von der Ursache eines fehlenden Stops. Bewusst als eigener Thread statt Teil des `CHECK_INTERVAL_MINUTES`-Zyklus: der Sicherheits-Check ist zeitkritisch (ein schnell fallender Kurs darf eine Position nicht erst nach bis zu `CHECK_INTERVAL_MINUTES` ungeschuetzt lassen), waehrend der Watchlist-Scan an die Kerzengroesse (`TIMEFRAME`) gebunden ist und deutlich laenger dauern kann (Backfill + Indikatoren fuer die ganze Watchlist) -- keiner der beiden Threads blockiert den anderen. Der Check selbst bleibt bewusst schlank (nur `get_all_positions`/`get_open_orders`, keine Bars, keine Indikator-Neuberechnung), relevant auf dem Pi Zero mit nur einem Kern. Fehlt ein Stop, wird das als WARNING geloggt, automatisch eine neue Stop-Loss-Order zum konfigurierten `STOP_LOSS_PCT` nachgelegt (mit kleinem Sicherheitspuffer unter dem aktuellen Kurs, nicht stur auf dem urspruenglichen Entry-Level -- sonst faellt eine knapp verzoegerte Neuanlage demselben Fehler zum Opfer), und (falls `TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID_ALERTS` gesetzt sind) sofort per Telegram in den Alerts-Chat alarmiert. Ist der Kurs bereits so schnell gefallen, dass selbst der gepufferte Stop-Preis von Alpaca abgelehnt wird ("stop price must be less than current price"), schliesst der Bot die Position sofort per Market-Sell -- der "geschlossen"-Log-Eintrag/-Alert wird dabei erst geschrieben, NACHDEM Alpaca die Order tatsaechlich bestaetigt hat (inkl. Order-ID/Status im Log), nicht schon dafuer, dass dieser Code-Pfad erreicht wurde. Scheitert auch der Market-Sell (oder schon die Stop-Preis-Berechnung selbst), gibt es einen eigenen, klar unterscheidbaren "KRITISCH"-Alert statt der normalen Warnung -- der geht in den separaten Status-Chat (siehe "Telegram-Benachrichtigungen" unten). Positionen mit Menge 0 (z.B. kurzzeitig nach einem gerade gefuellten Verkauf noch in `get_all_positions()` sichtbar) werden vor jeder Pruefung komplett uebersprungen, ganz ohne API-Aufruf. Jeder an Alpaca uebergebene Preis (Bracket-Order, nachgelegter Stop) laeuft durch `risk_manager.round_to_valid_tick()` -- Alpacas minimales Preis-Inkrement (SEC Reg NMS Rule 612): 2 Nachkommastellen bei Kursen >= $1, 4 bei Kursen darunter.
 - **Verwaiste Take-Profit-Orders:** sind die Aktien einer ungeschuetzten Position bereits durch eine andere offene Order gebunden (z.B. ein uebrig gebliebenes Take-Profit-Leg ohne zugehoeriges Stop-Loss, ein Nachwehen aus der Zeit vor dem GTC-Fix), wuerde eine blind versuchte neue Stop-Order zwangslaeufig mit "insufficient qty available for order" scheitern und sich jeden Zyklus identisch wiederholen. Der Bot erkennt eine solche Order eindeutig (`order_executor.is_orphaned_take_profit_order`: SELL-Limit mit `order_class` bracket ODER oco, ohne aktives Stop-Loss-Gegenstueck) und storniert sie automatisch, bevor ein sauberes neues Stop-Loss+Take-Profit-Paar (OCO) fuer die volle, wieder freie Menge nachgelegt wird. Ist eine blockierende Order NICHT eindeutig zuordenbar (z.B. eine gerade laufende reguläre Exit-Order), wird nichts automatisch angefasst -- nur ein "KRITISCH"-Alert mit den Details, manuelle Pruefung noetig.
 - **Bracket- vs. OCO-Legs:** Alpaca kann die beiden Legs einer Multi-Leg-Order (Bracket beim Entry, OCO beim nachtraeglichen Exit-Paar) je nach Abfrage entweder als zwei eigenstaendige flache Eintraege ODER zusammengerollt im `.legs`-Feld der Parent-Order zurueckgeben. `OrderExecutor.get_open_orders()` fragt deshalb bewusst mit `nested=True` ab und raeumt das Ergebnis ueber `_flatten_order_legs()` zu einer flachen Liste auf, in der jedes Leg (Parent und Kinder) einzeln auftaucht -- das ist die einzige Stelle dafuer, sowohl `has_active_stop_loss()` als auch der Portfolio-Scan und die Reparaturlogik in `bot.py` bauen direkt darauf auf.
 - **Einmaliger Portfolio-Scan (rein lesend, keine Aenderungen):** `python -m trading_bot.scan_position_protection` geht einmalig ueber alle offenen Positionen und meldet fuer jede, ob sie geschuetzt ist und falls nicht, ob (und welche) blockierende Order dahinter steckt -- gedacht, um vor dem produktiven Einsatz der obigen Reparaturlogik zu sehen, wie viele Positionen im Portfolio tatsaechlich betroffen sind.
@@ -301,6 +301,49 @@ journalctl -u tradingbot -f | grep -E "SafetyCheck|UNGESCHUETZTE|KRITISCH|nachge
 # Nur der Strategie-Scan
 journalctl -u tradingbot -f | grep -vE "SafetyCheck|UNGESCHUETZTE|KRITISCH|nachgelegt|verwaiste"
 ```
+
+## Telegram-Benachrichtigungen: Alerts- vs. Status-Kanal
+
+`notifier.py` verschickt Telegram-Nachrichten in zwei getrennte Chats (ein
+Bot, zwei Chat-IDs -- siehe `.env.example` fuer `TELEGRAM_CHAT_ID_ALERTS` /
+`TELEGRAM_CHAT_ID_STATUS`), damit ein seltener wichtiger Alarm nicht
+zwischen vielen haeufigen Routine-Meldungen im selben Chat untergeht:
+
+| Nachrichtenart | Methode | Kanal |
+|---|---|---|
+| Order abgelehnt (Buy/Sell/Bracket) | `notify_order_failure` | Alerts |
+| Stop-Loss automatisch nachgelegt / OCO-Paar repariert (Erfolg) | `notify_unprotected_position(critical=False)` | Alerts |
+| Position konnte NICHT automatisch geschuetzt werden (Stop-Preis-Berechnung fehlgeschlagen, Market-Sell-Fallback fehlgeschlagen, unklare blockierende Order, Stornierung fehlgeschlagen) | `notify_unprotected_position(critical=True)` | Status |
+| Sicherheits-Check-Thread unerwartet gestorben (oder andere System-/Infrastruktur-Fehler) | `notify_critical` | Status |
+
+Kurz: **WARNUNG bleibt im Alerts-Chat, jedes KRITISCH geht in den
+Status-Chat.** Ist `TELEGRAM_CHAT_ID_STATUS` nicht gesetzt, wird eine
+Status-Nachricht NICHT verschluckt, sondern mit `WARNING` geloggt ("Status-
+Kanal ... ist nicht konfiguriert -- folgende Status-Nachricht wird NUR
+geloggt") -- der Bot laeuft normal weiter, es gibt nur keine Telegram-
+Zustellung bis die Chat-ID eingetragen ist. `TELEGRAM_CHAT_ID` (alter Name)
+bleibt als Fallback fuer `TELEGRAM_CHAT_ID_ALERTS` gueltig, ein
+bestehendes `.env` muss also nicht angepasst werden.
+
+### Zweiten Telegram-Chat einrichten
+
+Ein zweiter Bot ist nicht noetig -- derselbe Bot kann problemlos Nachrichten
+an mehrere Chats schicken, es braucht nur eine zweite Chat-ID:
+
+1. Im Telegram-Client einen neuen Chat anlegen (z.B. eine neue Gruppe
+   "TradingBotStatus", oder einfach eine zweite Direktnachricht an den
+   bestehenden Bot).
+2. Den bestehenden Bot zu diesem neuen Chat hinzufuegen (bei einer Gruppe:
+   als Mitglied einladen) und dort mindestens eine Nachricht schreiben --
+   Telegram liefert die Chat-ID eines Bots sonst nicht aus, solange er den
+   Chat noch nie gesehen hat.
+3. Die neue Chat-ID herausfinden, z.B. ueber `@userinfobot` (zeigt bei einer
+   Gruppe nur die eigene User-ID, nicht die Gruppen-ID -- dafuer stattdessen
+   `https://api.telegram.org/bot<TOKEN>/getUpdates` im Browser oder per
+   `curl` aufrufen, nachdem eine Nachricht im neuen Chat geschrieben wurde;
+   die Gruppen-Chat-ID ist eine negative Zahl).
+4. Die gefundene ID als `TELEGRAM_CHAT_ID_STATUS` in `.env` eintragen und
+   den Bot neu starten.
 
 ## Fehlerbehandlung
 

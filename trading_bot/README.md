@@ -424,9 +424,12 @@ Server-Code oder Keys, die du auf GitHub Pages hostest.
 ### 1. `api_server.py` auf dem Pi (neben dem Bot)
 
 Liest dieselben Alpaca-Keys aus `trading_bot/.env` -- keine zweite
-Schluessel-Verwaltung. Stellt **nur** einen lesenden Endpoint bereit
-(`GET /api/status`: Kontostand, Tages-P&L, offene Positionen, die letzten
-10 BUY/SELL-Trades aus `trades.csv`, Paper/Live-Flag), keine Order-Routen.
+Schluessel-Verwaltung. Stellt **nur** zwei lesende Endpoints bereit, keine
+Order-Routen:
+- `GET /api/status`: Kontostand, Tages-P&L, offene Positionen, die letzten
+  10 BUY/SELL-Trades aus `trades.csv`, Paper/Live-Flag.
+- `GET /api/equity-history?period=1w|1m|3m|all`: Kontostand-Verlauf fuer
+  den Chart auf der Dashboard-Seite (siehe "Kontostand-Verlauf" unten).
 
 ```bash
 # einmalig, im bereits aktivierten venv (siehe Setup oben):
@@ -513,6 +516,44 @@ die vorherige Seite -- unter **Settings → Pages** die Quelle auf den
 4. **Zum Home-Bildschirm hinzufuegen (iPhone):** Seite in Safari oeffnen,
    Teilen-Icon → "Zum Home-Bildschirm" -- startet dann wie eine eigene App,
    ohne Safari-Adressleiste.
+
+### 3. Kontostand-Verlauf (Chart)
+
+Zweite Karte auf dem Dashboard, direkt unter dem Kontostand: eine Linie des
+Paper-/Live-Kontostands (Equity) pro Handelstag, mit Zeitraum-Umschalter
+(1 Woche / 1 Monat / 3 Monate / Alles, Standard: Alles), einer Kennzahlenzeile
+(aktueller Kontostand, P&L im gewaehlten Zeitraum in $ und %, bester/
+schlechtester Tag, maximaler Drawdown) und einer gestrichelten Linie beim
+Startwert des Zeitraums.
+
+**Datenquelle:** `GET /api/equity-history?period=...` auf dem Pi, das
+intern Alpacas `GET /v2/account/portfolio/history` abfragt
+(`OrderExecutor.get_portfolio_history`, taegliche Aufloesung). Handelsfreie
+Tage (Wochenende/Feiertag) liefert Alpaca schlicht nicht zurueck -- die
+x-Achse zeigt dadurch automatisch nur echte Handelstage, keine kuenstlichen
+Spruenge. Server-Zeitstempel sind Unix-Sekunden UTC, werden aber
+serverseitig nach Europe/Berlin umgerechnet, bevor sie an den Browser gehen
+(`api_server._extract_equity_points`).
+
+**Cache:** Die aufbereitete Antwort wird pro Zeitraum 5 Minuten lang im
+Arbeitsspeicher des `api_server.py`-Prozesses zwischengehalten
+(`EQUITY_HISTORY_CACHE_SECONDS`) -- mehrfaches Neuladen der Seite oder ein
+Wechsel zwischen den vier Zeitraum-Buttons triggert dadurch nicht bei jedem
+Klick einen neuen Alpaca-Call.
+
+**Chart-Bibliothek:** [Chart.js](https://www.chartjs.org/) 4.6.1, als
+`chart.umd.min.js` (~205 KB, minifiziert) direkt im Projekt-Root
+mitgeliefert statt von einem CDN geladen -- die Seite funktioniert dadurch
+unveraendert auch dann, wenn ein externes CDN mal nicht erreichbar ist.
+Laeuft im Browser des Handys, nicht auf dem Pi -- fuer die Pi-Zero-CPU
+macht das also keinen Unterschied, nur die Aufbereitung in `api_server.py`
+(ein paar simple Schleifen ueber hoechstens ein paar tausend Tagespunkte)
+laeuft dort, und das ist trivial billig.
+
+Ist Alpaca gerade nicht erreichbar oder liefert keine Daten, zeigt die
+Chart-Karte eine klare Fehlermeldung statt einer leeren Flaeche -- der Rest
+des Dashboards (Kontostand-Karte, Positionen, Trades) laeuft davon
+unbeeintraechtigt weiter.
 
 ## 24/7-Absicherung (Hardware-Watchdog, Auto-Restart, Health-Checks, ...)
 

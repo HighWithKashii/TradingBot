@@ -3,8 +3,10 @@
 Laeuft NEBEN dem Trading-Bot (gleicher Rechner, z. B. Raspberry Pi), liest
 dieselben Alpaca-Keys aus trading_bot/.env ueber die bestehende Config/
 OrderExecutor-Logik (keine eigene Alpaca-Anbindung, kein doppelter Code) und
-stellt einen einzigen Endpoint bereit, den die statische index.html (GitHub
-Pages) per fetch() abfragt.
+stellt zwei Endpoints bereit, die die statische index.html (GitHub Pages)
+per fetch() abfragt: `/api/status` (Account/Positionen/letzte Trades) und
+`/api/equity-history` (Kontostand-Verlauf fuer den Chart, siehe
+build_equity_history_payload).
 
 Nur lesend: es werden keine Order-Endpunkte exponiert. Zugriff ausschliesslich
 mit gueltigem Header `X-Dashboard-Token`, Token wird beim ersten Start
@@ -26,12 +28,15 @@ import logging
 import secrets
 import stat
 import sys
+import time
 from collections import deque
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from functools import wraps
 from pathlib import Path
 from typing import Callable
+from zoneinfo import ZoneInfo
 
+import requests
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 
@@ -43,6 +48,16 @@ logger = logging.getLogger("dashboard_api")
 
 TOKEN_PATH = Path(__file__).resolve().parent / "dashboard_token.txt"
 MAX_RECENT_TRADES = 10
+
+# Kontostand-Verlauf (siehe build_equity_history_payload). Alpaca kennt kein
+# period="all" -- 20A (20 Jahre) ist grosszuegig mehr als jedes Paper-/
+# Live-Konto jemals alt sein kann, Alpaca schneidet die Antwort automatisch
+# auf die tatsaechlich vorhandene Historie zu (kein Padding mit leeren Tagen
+# davor, siehe Alpaca-Doku: taegliche Aufloesung hat kein Limit, Daten gibt
+# es ab Account-Erstellung).
+EQUITY_HISTORY_PERIODS: dict[str, str] = {"1w": "1W", "1m": "1M", "3m": "3M", "all": "20A"}
+EQUITY_HISTORY_CACHE_SECONDS = 300.0
+BERLIN_TZ = ZoneInfo("Europe/Berlin")
 
 # Diese Datei liegt in trading_bot/, das Projekt-Root ist eine Ebene hoeher --
 # die Zertifikatsdateien liegen im Root, nicht im trading_bot-Unterordner.
@@ -187,6 +202,149 @@ def build_status_payload(executor: OrderExecutor, config: Config) -> dict:
     }
 
 
+def _extract_equity_points(raw: dict) -> tuple[list[dict], float | None]:
+    """Wandelt die rohe Alpaca-Portfolio-History-Antwort (parallele Listen
+    `timestamp`/`equity`, siehe OrderExecutor.get_portfolio_history) in eine
+    saubere, chronologisch sortierte Liste von Tagespunkten um.
+
+    Verteidigt sich gegen genau die Eigenheiten, die Alpaca fuer dieses
+    Endpoint bekannt hat:
+    - `None`-Werte in `timestamp` oder `equity` (laut Beobachtung gelegentlich
+      vorhanden) -- ein solcher Index wird komplett uebersprungen, nicht als
+      0 oder NaN eingetragen, sonst gaebe es einen falschen Ausschlag im
+      Chart.
+    - Tage ohne Handel (Wochenende/Feiertag) liefert Alpaca schlicht gar
+      nicht erst zurueck -- es muss hier nichts extra gefiltert werden, die
+      Liste enthaelt dadurch automatisch nur echte Handelstage, keine
+      kuenstlichen Spruenge auf der x-Achse.
+    - Timestamps sind Unix-Sekunden in UTC; fuer die Anzeige wird daraus das
+      Kalenderdatum in Europe/Berlin gebildet (nicht einfach das UTC-Datum --
+      wuerde bei einem spaeten UTC-Zeitstempel sonst einen Tag zu frueh
+      anzeigen).
+
+    Gibt (points, base_value) zurueck -- `base_value` faellt auf den ersten
+    gueltigen Equity-Wert zurueck, falls Alpaca keinen mitliefert (ebenfalls
+    `Optional` im Response-Schema).
+    """
+    timestamps = raw.get("timestamp") or []
+    equities = raw.get("equity") or []
+
+    points: list[dict] = []
+    for ts, equity in zip(timestamps, equities):
+        if ts is None or equity is None:
+            continue
+        try:
+            ts_int = int(ts)
+            equity_float = float(equity)
+        except (TypeError, ValueError):
+            continue
+        local_date = datetime.fromtimestamp(ts_int, tz=timezone.utc).astimezone(BERLIN_TZ).date()
+        points.append({"timestamp": ts_int, "date": local_date.isoformat(), "equity": equity_float})
+
+    points.sort(key=lambda p: p["timestamp"])
+
+    base_value = raw.get("base_value")
+    try:
+        base_value = float(base_value) if base_value is not None else None
+    except (TypeError, ValueError):
+        base_value = None
+    if base_value is None and points:
+        base_value = points[0]["equity"]
+
+    return points, base_value
+
+
+def _compute_equity_stats(points: list[dict], base_value: float | None) -> dict:
+    """Kennzahlenzeile fuers Dashboard: aktueller Kontostand, P&L im Zeitraum
+    ($ und %), bester/schlechtester Tag, maximaler Drawdown. Reine,
+    Flask-freie Funktion auf der schon bereinigten Punkteliste -- billige
+    O(n)-Schleifen ueber hoechstens ein paar tausend Tagespunkte, selbst auf
+    einem Pi Zero kein Thema.
+    """
+    if not points:
+        return {
+            "current_equity": None,
+            "base_value": base_value,
+            "period_pl_dollar": None,
+            "period_pl_percent": None,
+            "best_day": None,
+            "worst_day": None,
+            "max_drawdown_dollar": None,
+            "max_drawdown_percent": None,
+        }
+
+    current_equity = points[-1]["equity"]
+    period_pl_dollar = (current_equity - base_value) if base_value else None
+    period_pl_percent = (period_pl_dollar / base_value * 100) if base_value and period_pl_dollar is not None else None
+
+    best_day = None
+    worst_day = None
+    peak = points[0]["equity"]
+    max_drawdown_dollar = 0.0
+    max_drawdown_percent = 0.0
+
+    for prev, curr in zip(points, points[1:]):
+        change_dollar = curr["equity"] - prev["equity"]
+        change_percent = (change_dollar / prev["equity"] * 100) if prev["equity"] else 0.0
+        day = {"date": curr["date"], "change_dollar": change_dollar, "change_percent": change_percent}
+        if best_day is None or change_dollar > best_day["change_dollar"]:
+            best_day = day
+        if worst_day is None or change_dollar < worst_day["change_dollar"]:
+            worst_day = day
+
+        peak = max(peak, curr["equity"])
+        drawdown_dollar = curr["equity"] - peak
+        drawdown_percent = (drawdown_dollar / peak * 100) if peak else 0.0
+        if drawdown_dollar < max_drawdown_dollar:
+            max_drawdown_dollar = drawdown_dollar
+            max_drawdown_percent = drawdown_percent
+
+    return {
+        "current_equity": current_equity,
+        "base_value": base_value,
+        "period_pl_dollar": period_pl_dollar,
+        "period_pl_percent": period_pl_percent,
+        "best_day": best_day,
+        "worst_day": worst_day,
+        "max_drawdown_dollar": max_drawdown_dollar,
+        "max_drawdown_percent": max_drawdown_percent,
+    }
+
+
+def build_equity_history_payload(executor: OrderExecutor, period_key: str) -> dict:
+    """Baut die komplette /api/equity-history-Antwort fuer einen der
+    erlaubten Zeitraeume (siehe EQUITY_HISTORY_PERIODS). Von der Flask-
+    Schicht und vom Cache getrennt, damit sich die Aufbereitung ohne
+    HTTP/Token/Cache-Kram mit einem Fake-Executor testen laesst.
+    """
+    alpaca_period = EQUITY_HISTORY_PERIODS[period_key]
+    raw = executor.get_portfolio_history(alpaca_period, timeframe="1D")
+    points, base_value = _extract_equity_points(raw)
+    stats = _compute_equity_stats(points, base_value)
+    return {"period": period_key, "points": points, **stats}
+
+
+# Einfache In-Memory-TTL-Cache (siehe EQUITY_HISTORY_CACHE_SECONDS) pro
+# Zeitraum -- der Flask-Dev-Server hier laeuft einzeln (kein threaded=True,
+# siehe main()), Requests werden also sequentiell abgearbeitet, ein Lock ist
+# dafuer nicht noetig. Zweck: mehrfaches Neuladen der Dashboard-Seite oder
+# ein Wechsel zwischen den vier Zeitraum-Buttons soll nicht bei jedem Klick
+# erneut Alpaca treffen (Rate-Limit-Schonung UND weniger Arbeit fuer den
+# Pi Zero).
+_equity_history_cache: dict[str, tuple[float, dict]] = {}
+
+
+def _get_equity_history_cached(executor: OrderExecutor, period_key: str) -> dict:
+    now = time.monotonic()
+    cached = _equity_history_cache.get(period_key)
+    if cached is not None and (now - cached[0]) < EQUITY_HISTORY_CACHE_SECONDS:
+        return cached[1]
+
+    payload = build_equity_history_payload(executor, period_key)
+    _equity_history_cache[period_key] = (now, payload)
+    return payload
+
+
 def create_app(executor: OrderExecutor, config: Config, token: str) -> Flask:
     app = Flask(__name__)
     CORS(app)  # index.html laeuft auf einer anderen Origin (GitHub Pages) --
@@ -206,6 +364,30 @@ def create_app(executor: OrderExecutor, config: Config, token: str) -> Flask:
         except OrderExecutionError as exc:
             logger.error("Alpaca-Abfrage fehlgeschlagen: %s", exc)
             return jsonify({"error": f"Alpaca nicht erreichbar: {exc}"}), 502
+        return jsonify(payload)
+
+    @app.route("/api/equity-history")
+    @require_token
+    def equity_history():
+        period_key = request.args.get("period", "all").strip().lower()
+        if period_key not in EQUITY_HISTORY_PERIODS:
+            return (
+                jsonify({"error": f"Ungueltiger Zeitraum '{period_key}', erlaubt: {', '.join(EQUITY_HISTORY_PERIODS)}"}),
+                400,
+            )
+        try:
+            payload = _get_equity_history_cached(executor, period_key)
+        except OrderExecutionError as exc:
+            logger.error("Alpaca-Portfolio-History-Abfrage fehlgeschlagen: %s", exc)
+            return jsonify({"error": f"Alpaca nicht erreichbar: {exc}"}), 502
+        except requests.exceptions.RequestException as exc:
+            # Dasselbe Timeout, das OrderExecutor._client fuer JEDEN Alpaca-
+            # Call erzwingt (siehe order_executor.apply_default_request_timeout)
+            # -- hier separat behandelt, weil requests.exceptions.Timeout keine
+            # OrderExecutionError ist (siehe bot.run_safety_check_once fuer
+            # denselben Fall).
+            logger.error("Timeout/Netzwerkfehler bei Alpaca-Portfolio-History: %s", exc)
+            return jsonify({"error": f"Alpaca nicht erreichbar (Timeout): {exc}"}), 502
         return jsonify(payload)
 
     return app

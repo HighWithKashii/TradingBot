@@ -155,6 +155,62 @@
   .sub-stat .label { font-size: 11px; color: var(--text-dim); margin-bottom: 3px; }
   .sub-stat .value { font-family: var(--mono); font-size: 14px; }
 
+  /* --- Kontostand-Verlauf (Equity-Chart) --- */
+  .period-switcher {
+    display: flex;
+    gap: 6px;
+    margin-bottom: 16px;
+  }
+  .period-btn {
+    flex: 1;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    font-family: var(--sans);
+    font-size: 13px;
+    font-weight: 600;
+    padding: 8px 4px;
+    border-radius: 10px;
+    cursor: pointer;
+    /* Grosszuegige Tapflaeche fuers Handy (Anforderung 6) */
+    min-height: 36px;
+  }
+  .period-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .period-btn:active { opacity: 0.8; }
+
+  .equity-stats {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+    margin-bottom: 16px;
+  }
+  .equity-stat .label { font-size: 11px; color: var(--text-dim); margin-bottom: 3px; }
+  .equity-stat .value { font-family: var(--mono); font-size: 14px; font-weight: 600; }
+  .equity-stat .value.wide { grid-column: 1 / -1; font-size: 15px; }
+
+  .chart-wrap {
+    position: relative;
+    width: 100%;
+    /* Feste Hoehe statt aspect-ratio -- bleibt auch bei sehr schmalen
+       Handybreiten gut lesbar statt zu flach zu werden. */
+    height: 220px;
+  }
+  .chart-wrap canvas { width: 100% !important; height: 100% !important; }
+
+  .chart-message {
+    display: none;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    height: 220px;
+    color: var(--text-dim);
+    font-size: 13px;
+    padding: 0 20px;
+    line-height: 1.5;
+  }
+  .chart-message.show { display: flex; }
+  .chart-message.err { color: var(--red); }
+
   /* --- Section headings --- */
   .section-title {
     font-size: 13px;
@@ -328,6 +384,43 @@
     </div>
   </div>
 
+  <!-- Kontostand-Verlauf -->
+  <div class="section-title">Kontostand-Verlauf</div>
+  <div class="card" id="equityCard">
+    <div class="period-switcher" id="periodSwitcher">
+      <button class="period-btn" data-period="1w">1W</button>
+      <button class="period-btn" data-period="1m">1M</button>
+      <button class="period-btn" data-period="3m">3M</button>
+      <button class="period-btn active" data-period="all">Alles</button>
+    </div>
+    <div class="equity-stats" id="equityStats">
+      <div class="equity-stat">
+        <div class="label">Kontostand</div>
+        <div class="value" id="eqCurrent">–</div>
+      </div>
+      <div class="equity-stat">
+        <div class="label">P&amp;L im Zeitraum</div>
+        <div class="value" id="eqPl">–</div>
+      </div>
+      <div class="equity-stat">
+        <div class="label">Bester Tag</div>
+        <div class="value" id="eqBestDay">–</div>
+      </div>
+      <div class="equity-stat">
+        <div class="label">Schlechtester Tag</div>
+        <div class="value" id="eqWorstDay">–</div>
+      </div>
+      <div class="equity-stat">
+        <div class="value wide" id="eqDrawdown">–</div>
+        <div class="label" style="margin-top:3px;">Max. Drawdown im Zeitraum</div>
+      </div>
+    </div>
+    <div class="chart-wrap" id="chartWrap">
+      <canvas id="equityChart"></canvas>
+    </div>
+    <div class="chart-message" id="equityMessage"></div>
+  </div>
+
   <!-- Positionen -->
   <div class="section-title">Offene Positionen</div>
   <div class="card" id="positionsCard">
@@ -370,6 +463,10 @@
   </div>
 </div>
 
+<!-- Lokal abgelegt statt CDN (chart.umd.min.js, Chart.js 4.6.1) -- die
+     Seite soll auch ohne Abhaengigkeit von einem externen CDN laufen,
+     siehe README fuer die Herkunft der Datei. -->
+<script src="./chart.umd.min.js"></script>
 <script>
 (function () {
   "use strict";
@@ -377,6 +474,12 @@
   const STORAGE_KEY = "tradingDashboardConfig";
   const REFRESH_MS = 30000;
   const FETCH_TIMEOUT_MS = 8000;
+  // Kontostand-Verlauf aendert sich nicht minuetlich und wird serverseitig
+  // ohnehin 5 Minuten gecacht (siehe api_server.py) -- ein eigenes, selteneres
+  // Intervall statt am 30s-Status-Poll mitzuhaengen, spart unnoetige
+  // Chart-Neuzeichnungen auf dem Handy.
+  const EQUITY_REFRESH_MS = 5 * 60 * 1000;
+  const DEFAULT_EQUITY_PERIOD = "all";
 
   const el = (id) => document.getElementById(id);
   const dot = el("statusDot");
@@ -384,6 +487,9 @@
 
   let lastGoodData = null;
   let refreshTimer = null;
+  let equityRefreshTimer = null;
+  let equityChart = null;
+  let currentEquityPeriod = DEFAULT_EQUITY_PERIOD;
 
   // ---------- Konfiguration (localStorage) ----------
   function loadConfig() {
@@ -435,6 +541,17 @@
     } catch (e) {
       return iso;
     }
+  }
+
+  // "2026-10-21" -> "21.10." (deutsches Kurzformat, Anforderung 1). Reines
+  // Stringparsing statt new Date(...) -- das Backend liefert das Datum
+  // bereits als Europe/Berlin-Kalendertag (siehe api_server.py), hier noch
+  // einmal durch eine Date/Timezone-Umrechnung zu schicken koennte je nach
+  // Geraete-Zeitzone den Tag wieder verschieben.
+  function formatShortDateDE(dateStr) {
+    const parts = dateStr.split("-");
+    if (parts.length !== 3) return dateStr;
+    return `${parts[2]}.${parts[1]}.`;
   }
 
   // ---------- Rendering ----------
@@ -605,6 +722,232 @@
     refreshTimer = setInterval(fetchStatus, REFRESH_MS);
   }
 
+  // ---------- Kontostand-Verlauf (Equity-Chart) ----------
+  function setEquityMessage(message, isError) {
+    const msgEl = el("equityMessage");
+    const statsEl = el("equityStats");
+    const chartWrap = el("chartWrap");
+
+    if (!message) {
+      msgEl.className = "chart-message";
+      msgEl.textContent = "";
+      statsEl.style.display = "grid";
+      chartWrap.style.display = "block";
+      return;
+    }
+    // Anforderung 7: sichtbare Fehlermeldung statt leerer Flaeche, UND der
+    // Rest des Dashboards (Konto-Karte, Positionen, Trades) laeuft normal
+    // weiter -- diese Meldung ersetzt nur die Chart-Karte, nicht die ganze
+    // Seite und nicht die globale Verbindungs-Banner oben.
+    msgEl.className = "chart-message show" + (isError ? " err" : "");
+    msgEl.textContent = message;
+    statsEl.style.display = "none";
+    chartWrap.style.display = "none";
+  }
+
+  function renderEquityStats(data) {
+    el("eqCurrent").textContent = data.current_equity != null ? formatCurrency(data.current_equity) : "–";
+
+    const plEl = el("eqPl");
+    if (data.period_pl_dollar != null && data.period_pl_percent != null) {
+      const cls = plClass(data.period_pl_dollar);
+      plEl.className = "value " + cls;
+      plEl.textContent = formatSignedCurrency(data.period_pl_dollar) + " " + formatSignedPercent(data.period_pl_percent);
+    } else {
+      plEl.className = "value";
+      plEl.textContent = "–";
+    }
+
+    function renderDay(elId, day) {
+      const target = el(elId);
+      if (!day) {
+        target.className = "value";
+        target.textContent = "–";
+        return;
+      }
+      target.className = "value " + plClass(day.change_dollar);
+      target.textContent =
+        formatShortDateDE(day.date) + "  " + formatSignedCurrency(day.change_dollar) + " " + formatSignedPercent(day.change_percent);
+    }
+    renderDay("eqBestDay", data.best_day);
+    renderDay("eqWorstDay", data.worst_day);
+
+    const ddEl = el("eqDrawdown");
+    if (data.max_drawdown_dollar != null) {
+      ddEl.className = "value wide " + plClass(data.max_drawdown_dollar);
+      ddEl.textContent = formatSignedCurrency(data.max_drawdown_dollar) + " " + formatSignedPercent(data.max_drawdown_percent);
+    } else {
+      ddEl.className = "value wide";
+      ddEl.textContent = "–";
+    }
+  }
+
+  function renderEquityChart(data) {
+    if (typeof Chart === "undefined") {
+      setEquityMessage("⚠️ Chart-Bibliothek konnte nicht geladen werden (chart.umd.min.js fehlt?).", true);
+      return;
+    }
+
+    const points = data.points || [];
+    if (points.length === 0) {
+      setEquityMessage("Noch keine Kontostand-Historie fuer diesen Zeitraum verfuegbar.", false);
+      return;
+    }
+
+    setEquityMessage(null);
+    renderEquityStats(data);
+
+    const labels = points.map((p) => formatShortDateDE(p.date));
+    const equityValues = points.map((p) => p.equity);
+    const baseLine = points.map(() => data.base_value);
+
+    const ctx = el("equityChart").getContext("2d");
+    if (equityChart) {
+      equityChart.data.labels = labels;
+      equityChart.data.datasets[0].data = equityValues;
+      equityChart.data.datasets[1].data = baseLine;
+      equityChart.update();
+      return;
+    }
+
+    equityChart = new Chart(ctx, {
+      type: "line",
+      data: {
+        labels: labels,
+        datasets: [
+          {
+            label: "Kontostand",
+            data: equityValues,
+            borderColor: "#3b82f6",
+            backgroundColor: "rgba(59,130,246,0.08)",
+            borderWidth: 2,
+            pointRadius: 0,
+            pointHitRadius: 10,
+            tension: 0.15,
+            fill: true,
+          },
+          {
+            // Anforderung 4: gestrichelte horizontale Linie beim Startwert
+            // des Zeitraums -- bewusst als simples zweites Dataset mit
+            // konstantem Wert statt eines extra Annotation-Plugins, damit
+            // keine zusaetzliche Bibliothek noetig ist (Pi-Zero-Vorgabe:
+            // keine schweren Abhaengigkeiten).
+            label: "Startwert",
+            data: baseLine,
+            borderColor: "rgba(124,135,151,0.6)",
+            borderWidth: 1,
+            borderDash: [6, 4],
+            pointRadius: 0,
+            pointHitRadius: 0,
+            fill: false,
+          },
+        ],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: { duration: 200 },
+        interaction: { mode: "index", intersect: false },
+        scales: {
+          x: {
+            ticks: { color: "#7c8797", maxRotation: 0, autoSkip: true, font: { size: 11 } },
+            grid: { display: false },
+          },
+          y: {
+            ticks: {
+              color: "#7c8797",
+              font: { size: 11 },
+              callback: (value) => formatCurrency(value),
+            },
+            grid: { color: "rgba(255,255,255,0.06)" },
+          },
+        },
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            backgroundColor: "#1a2230",
+            titleColor: "#e8ecf1",
+            bodyColor: "#e8ecf1",
+            borderColor: "rgba(255,255,255,0.08)",
+            borderWidth: 1,
+            padding: 10,
+            // Anforderung 5: Datum, Kontostand, Tagesveraenderung -- die
+            // "Startwert"-Hilfslinie wird hier bewusst ausgeblendet, die
+            // zeigt sich nur visuell im Chart, nicht im Tooltip.
+            filter: (item) => item.datasetIndex === 0,
+            callbacks: {
+              title: (items) => (items.length ? points[items[0].dataIndex].date.split("-").reverse().join(".") : ""),
+              label: (item) => {
+                const idx = item.dataIndex;
+                const equity = points[idx].equity;
+                let line = "Kontostand: " + formatCurrency(equity);
+                if (idx > 0) {
+                  const change = equity - points[idx - 1].equity;
+                  const changePct = points[idx - 1].equity ? (change / points[idx - 1].equity) * 100 : 0;
+                  line += "  (" + formatSignedCurrency(change) + " " + formatSignedPercent(changePct) + ")";
+                }
+                return line;
+              },
+            },
+          },
+        },
+      },
+    });
+  }
+
+  async function fetchEquityHistory(period) {
+    if (!hasConfig()) return; // Haupt-Fehlermeldung kommt bereits aus fetchStatus()
+
+    const cfg = loadConfig();
+    const url = cfg.apiUrl.replace(/\/+$/, "") + "/api/equity-history?period=" + encodeURIComponent(period);
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+
+    try {
+      const res = await fetch(url, {
+        headers: { "X-Dashboard-Token": cfg.token },
+        signal: controller.signal,
+      });
+      clearTimeout(timeout);
+
+      if (res.status === 401) {
+        setEquityMessage("🔒 Ungueltiges Dashboard-Token.", true);
+        return;
+      }
+      if (!res.ok) {
+        let detail = "";
+        try { detail = (await res.json()).error || ""; } catch (e) {}
+        setEquityMessage("⚠️ Kontostand-Verlauf nicht verfuegbar" + (detail ? ": " + detail : " (Serverfehler " + res.status + ")"), true);
+        return;
+      }
+
+      const data = await res.json();
+      renderEquityChart(data);
+    } catch (err) {
+      clearTimeout(timeout);
+      setEquityMessage("📡 Kontostand-Verlauf: keine Verbindung zum Server.", true);
+    }
+  }
+
+  function startEquityPolling() {
+    if (equityRefreshTimer) clearInterval(equityRefreshTimer);
+    fetchEquityHistory(currentEquityPeriod);
+    equityRefreshTimer = setInterval(() => fetchEquityHistory(currentEquityPeriod), EQUITY_REFRESH_MS);
+  }
+
+  function initPeriodSwitcher() {
+    el("periodSwitcher").querySelectorAll(".period-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        if (btn.dataset.period === currentEquityPeriod) return;
+        el("periodSwitcher").querySelectorAll(".period-btn").forEach((b) => b.classList.remove("active"));
+        btn.classList.add("active");
+        currentEquityPeriod = btn.dataset.period;
+        startEquityPolling();
+      });
+    });
+  }
+
   // ---------- Einstellungen-Modal ----------
   function openModal() {
     const cfg = loadConfig() || {};
@@ -636,6 +979,7 @@
     setTimeout(() => {
       closeModal();
       startPolling();
+      startEquityPolling();
     }, 400);
   }
 
@@ -646,13 +990,18 @@
   el("modalBackdrop").addEventListener("click", (e) => {
     if (e.target === el("modalBackdrop")) closeModal();
   });
-  el("refreshBtn").addEventListener("click", fetchStatus);
+  el("refreshBtn").addEventListener("click", () => {
+    fetchStatus();
+    fetchEquityHistory(currentEquityPeriod);
+  });
 
   // ---------- Start ----------
+  initPeriodSwitcher();
   if (!hasConfig()) {
     openModal();
   }
   startPolling();
+  startEquityPolling();
 })();
 </script>
 

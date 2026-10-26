@@ -22,6 +22,7 @@ from alpaca.trading.enums import OrderClass, OrderSide, OrderType, QueryOrderSta
 from alpaca.trading.models import Order, Position, TradeAccount
 from alpaca.trading.requests import (
     GetOrdersRequest,
+    GetPortfolioHistoryRequest,
     LimitOrderRequest,
     MarketOrderRequest,
     StopLossRequest,
@@ -180,6 +181,34 @@ class OrderExecutor:
             return self._client.get_account()
         except APIError as exc:
             raise OrderExecutionError(f"Failed to fetch account info: {exc}") from exc
+
+    def get_portfolio_history(self, period: str, timeframe: str = "1D") -> dict:
+        """Kontostand-Verlauf fuers Dashboard (siehe api_server.py), roh als
+        Dict mit den Alpaca-Originalfeldern `timestamp`/`equity`/
+        `profit_loss`/`profit_loss_pct`/`base_value` (parallele Listen,
+        `timestamp` in Unix-Sekunden UTC, linksbasiert).
+
+        Bewusst `self._client.get(...)` direkt statt des komfortableren
+        `self._client.get_portfolio_history(...)`: Letzteres validiert die
+        Antwort zwingend gegen alpaca-py's PortfolioHistory-Pydantic-Modell,
+        das `timestamp`/`equity`/`profit_loss` als NICHT-optionale Listen
+        deklariert (nur `profit_loss_pct` ist korrekt `Optional`) -- gegen
+        das Modell getestet: ein einzelner `None`-Wert darin (laut Alpaca
+        kommt das gelegentlich vor) wirft dort eine harte ValidationError,
+        BEVOR die aufrufende Seite ueberhaupt die Chance haette, das
+        defensiv abzufangen. `self._client.get(path, data)` ist der
+        Low-Level-Pfad, den `get_portfolio_history()` intern zuerst aufruft
+        und der einfach das rohe, von requests/json bereits dekodierte Dict
+        zurueckgibt, ganz ohne die anschliessende Modell-Validierung --
+        `None`-Werte in den Listen bleiben hier also einfach `None`, es
+        liegt an der aufrufenden Seite (api_server.build_equity_history_payload),
+        das robust zu behandeln.
+        """
+        request = GetPortfolioHistoryRequest(period=period, timeframe=timeframe)
+        try:
+            return self._client.get("/account/portfolio/history", request.to_request_fields())
+        except APIError as exc:
+            raise OrderExecutionError(f"Failed to fetch portfolio history: {exc}") from exc
 
     def get_open_position(self, symbol: str) -> Position | None:
         try:

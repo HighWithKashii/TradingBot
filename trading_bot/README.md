@@ -431,6 +431,14 @@ Order-Routen:
 - `GET /api/equity-history?period=1w|1m|3m|all`: Kontostand-Verlauf fuer
   den Chart auf der Dashboard-Seite (siehe "Kontostand-Verlauf" unten).
 
+**Performance auf dem Pi Zero W:** `/api/status` wird 15 Sekunden lang
+zwischengespeichert (mehrfaches Neuladen/mehrere Geraete loesen dadurch
+nicht bei jedem Aufruf erneut zwei Alpaca-Calls + CSV-Lesen aus), die
+letzten Trades werden aus `trades.csv` nur vom Dateiende her rueckwaerts
+gelesen statt die komplette (potenziell ueber Monate gewachsene) Datei zu
+parsen (auf einer 57.644-Zeilen-CSV gemessen: ca. 230x schneller, siehe
+`_read_recent_trades`), und Antworten werden bei Bedarf gzip-komprimiert.
+
 ```bash
 # einmalig, im bereits aktivierten venv (siehe Setup oben):
 pip install flask flask-cors   # oder: pip install -r trading_bot/requirements.txt

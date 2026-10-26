@@ -13,6 +13,13 @@ mit gueltigem Header `X-Dashboard-Token`, Token wird beim ersten Start
 generiert und in dashboard_token.txt (neben dieser Datei, nicht eingecheckt)
 abgelegt.
 
+Auf schwache Hardware (Raspberry Pi Zero W) zugeschnitten: `/api/status`
+wird STATUS_CACHE_SECONDS lang zwischengespeichert (siehe
+_get_status_cached), `_read_recent_trades()` liest trades.csv nur vom Ende
+her rueckwaerts statt die ganze (potenziell ueber Monate gewachsene) Datei
+zu parsen, und Antworten ab GZIP_MIN_BYTES werden komprimiert, wenn der
+Client es akzeptiert (siehe _maybe_gzip_response).
+
 Laeuft ueber HTTPS mit dem per `sudo tailscale cert` erzeugten
 Tailscale-TLS-Zertifikat (Dateien liegen im Projekt-Root, nicht im
 trading_bot-Unterordner).
@@ -24,12 +31,13 @@ Start (immer vom Projekt-Root aus, wie main.py):
 from __future__ import annotations
 
 import csv
+import gzip
 import logging
 import secrets
 import stat
 import sys
+import threading
 import time
-from collections import deque
 from datetime import date, datetime, timezone
 from functools import wraps
 from pathlib import Path
@@ -48,6 +56,8 @@ logger = logging.getLogger("dashboard_api")
 
 TOKEN_PATH = Path(__file__).resolve().parent / "dashboard_token.txt"
 MAX_RECENT_TRADES = 10
+STATUS_CACHE_SECONDS = 15.0
+GZIP_MIN_BYTES = 1024
 
 # Kontostand-Verlauf (siehe build_equity_history_payload). Alpaca kennt kein
 # period="all" -- 20A (20 Jahre) ist grosszuegig mehr als jedes Paper-/
@@ -130,42 +140,172 @@ def _require_token(token: str) -> Callable:
     return decorator
 
 
-def _read_recent_trades(path: str, limit: int = MAX_RECENT_TRADES) -> list[dict]:
+def _parse_trade_log_row(fieldnames: list[str], raw_line: bytes, path: str) -> dict | None:
+    """Parst eine einzelne, schon als vollstaendig erkannte CSV-Datenzeile
+    (roh, noch mit evtl. trailing '\\r' -- TradeLogger schreibt im
+    'excel'-Dialekt mit '\\r\\n'-Zeilenende) zu demselben dict-Format, das
+    vorher csv.DictReader + die manuelle Feld-Konvertierung lieferten.
+
+    Gibt None zurueck (statt zu werfen) bei allem, was nicht als gueltige
+    BUY/SELL-Zeile durchgeht -- eine andere action (HOLD/ALERT/...), eine
+    kaputte/unvollstaendige Zeile (z.B. ein gerade erst halb geschriebener
+    letzter Datensatz, waehrend der Bot parallel in dieselbe Datei
+    schreibt), oder eine Zeile mit falscher Feldanzahl. Das Verhalten ist
+    bewusst identisch zum alten `except (KeyError, ValueError): skip`.
+    """
+    text = raw_line.rstrip(b"\r").decode("utf-8", errors="replace")
+    if not text:
+        return None
+    try:
+        fields = next(csv.reader([text]))
+    except csv.Error:
+        return None
+    if len(fields) != len(fieldnames):
+        # Klassischer Fingerabdruck einer abgeschnittenen/halb geschriebenen
+        # Zeile (Feld fehlt oder ein offenes Anfuehrungszeichen hat den
+        # Rest der Zeile verschluckt) -- kein Logging bei JEDER dieser
+        # Zeilen noetig, HOLD/ALERT-Zeilen mit anderem Feld-Layout gibt es
+        # in dieser CSV nicht, nur wirklich kaputte Zeilen landen hier.
+        return None
+    row = dict(zip(fieldnames, fields))
+
+    if row.get("action") not in ("BUY", "SELL"):
+        return None
+    try:
+        return {
+            "timestamp": row["timestamp"],
+            "symbol": row["symbol"],
+            "action": row["action"],
+            "qty": int(float(row["qty"])),
+            "price": float(row["price"]),
+            "reason": row["reason"],
+        }
+    except (KeyError, ValueError):
+        logger.warning("Ueberspringe unlesbare Zeile in %s: %r", path, row)
+        return None
+
+
+def _read_recent_trades(path: str, limit: int = MAX_RECENT_TRADES, chunk_size: int = 65536) -> list[dict]:
     """Liest die letzten `limit` BUY/SELL-Zeilen aus trades.csv (HOLD/HALT/
-    ERROR-Zeilen zaehlen nicht als "Trade"), neueste zuerst. Nutzt eine
-    begrenzte deque statt die ganze Datei in eine Liste einzulesen, damit
-    das auch bei einer ueber Monate gewachsenen CSV schnell bleibt.
+    ERROR/ALERT-Zeilen zaehlen nicht als "Trade"), neueste zuerst.
+
+    Liest dafuer NUR vom Dateiende her rueckwaerts in `chunk_size`-Bloecken,
+    statt die komplette Datei vorwaerts zu parsen -- bei einer ueber Monate
+    gewachsenen trades.csv (auf dem Pi Zero gemessen: 6.9 MB / 57644 Zeilen,
+    7+ Sekunden fuer einen kompletten Vorwaerts-Scan) ist das der
+    dominierende Kostenfaktor von /api/status, obwohl uns nur die letzten
+    `limit` Zeilen interessieren.
+
+    Algorithmus (Standard-"Tail"-Technik, rueckwaerts in Bytes statt
+    Zeilen): die Kopfzeile wird einmalig vom Dateianfang gelesen (fuer die
+    Spaltennamen UND um deren Byte-Laenge als Abbruchgrenze zu kennen),
+    danach wird in chunk_size-Schritten vom Dateiende Richtung Kopfzeile
+    gelesen. Jeder Chunk wird an '\\n' in Zeilen zerlegt; die jeweils erste
+    Zeile eines Chunks ist fast immer am Chunk-Rand abgeschnitten (ihr
+    wahrer Anfang liegt im naechsten, weiter vorne liegenden Chunk) und
+    wird deshalb als `pending_prefix` an dessen letzte Zeile angehaengt,
+    statt sofort geparst zu werden -- das verhindert, dass eine echte Zeile
+    an einer zufaelligen Chunk-Grenze fälschlich in zwei Haelften zerfaellt.
+    Innerhalb eines Chunks werden die Zeilen rueckwaerts verarbeitet, womit
+    Treffer automatisch in "neueste zuerst"-Reihenfolge entstehen -- keine
+    abschliessende Umkehrung noetig.
+
+    Bewusst NICHT abgesichert: ein einzelnes CSV-Feld (z.B. `reason`), das
+    ein eingebettetes Zeilenumbruch-Zeichen enthaelt (RFC-4180-Mehrzeilen-
+    Felder wuerden beim Zerlegen an '\\n' faelschlich auseinandergerissen).
+    Ungefaehrlich hier: jede Stelle in bot.py, die `reason`/`detail` baut,
+    verkettet ausschliesslich mit Leerzeichen, nie mit '\\n' -- trades.csv
+    enthaelt also nie echte eingebettete Zeilenumbrueche in einem Feld.
+
+    Liest nie unter einem Lock -- das Schreiben (siehe TradeLogger._lock)
+    darf dadurch nie blockiert werden. Eine Zeile, die gerade erst zur
+    Haelfte geschrieben wurde (Bot schreibt parallel), fuehrt einfach zu
+    einem Feldanzahl-Mismatch beim Parsen und wird uebersprungen -- nie als
+    gueltig ausgegeben (siehe _parse_trade_log_row).
     """
     csv_path = Path(path)
     if not csv_path.exists():
         return []
 
-    recent: deque[dict] = deque(maxlen=limit)
-    with csv_path.open(newline="", encoding="utf-8") as f:
-        for row in csv.DictReader(f):
-            if row.get("action") not in ("BUY", "SELL"):
-                continue
-            try:
-                recent.append(
-                    {
-                        "timestamp": row["timestamp"],
-                        "symbol": row["symbol"],
-                        "action": row["action"],
-                        "qty": int(float(row["qty"])),
-                        "price": float(row["price"]),
-                        "reason": row["reason"],
-                    }
-                )
-            except (KeyError, ValueError):
-                logger.warning("Ueberspringe unlesbare Zeile in %s: %r", path, row)
+    matches: list[dict] = []
+    try:
+        with csv_path.open("rb") as f:
+            f.seek(0, 2)
+            file_size = f.tell()
+            if file_size == 0:
+                return []
 
-    return list(reversed(recent))  # neueste zuerst
+            f.seek(0)
+            header_line = f.readline()
+            header_end = f.tell()
+            if not header_line or file_size <= header_end:
+                return []  # leer oder nur Kopfzeile, keine Datenzeilen
+
+            try:
+                fieldnames = next(csv.reader([header_line.rstrip(b"\r\n").decode("utf-8", errors="replace")]))
+            except csv.Error:
+                return []
+
+            pos = file_size
+            pending_prefix = b""
+
+            while pos > header_end and len(matches) < limit:
+                read_size = min(chunk_size, pos - header_end)
+                pos -= read_size
+                f.seek(pos)
+                chunk = f.read(read_size)
+
+                lines = chunk.split(b"\n")
+                if pending_prefix:
+                    lines[-1] += pending_prefix
+
+                if pos > header_end:
+                    # Erste Zeile dieses Chunks ist (fast immer) an der
+                    # Chunk-Grenze abgeschnitten -- ihr Anfang steckt im
+                    # naechsten, noch zu lesenden (frueheren) Chunk.
+                    pending_prefix = lines.pop(0)
+                else:
+                    pending_prefix = b""
+
+                for raw_line in reversed(lines):
+                    if not raw_line.strip():
+                        continue
+                    parsed = _parse_trade_log_row(fieldnames, raw_line, path)
+                    if parsed is not None:
+                        matches.append(parsed)
+                        if len(matches) >= limit:
+                            break
+    except OSError as exc:
+        logger.warning("Konnte %s nicht lesen: %s", path, exc)
+        return []
+
+    return matches  # bereits neueste zuerst (siehe Docstring)
 
 
 def build_status_payload(executor: OrderExecutor, config: Config) -> dict:
     """Baut die komplette /api/status-Antwort. Von der Flask-Schicht
     getrennt, damit sich die eigentliche Logik ohne HTTP/Token-Kram mit
     einem Fake-Executor testen laesst.
+
+    get_account() und get_all_positions() laufen bewusst NACHEINANDER,
+    nicht parallel ueber einen ThreadPoolExecutor: beide teilen sich
+    dieselbe TradingClient-Instanz (also dieselbe requests.Session),
+    und requests selbst dokumentiert Session-Objekte NICHT als
+    offiziell thread-sicher fuer gleichzeitige Requests -- insbesondere
+    die Cookie-Jar-Mitpflege bei jeder Antwort ist ein bekannter, nicht
+    abgesicherter Streitpunkt. Dass Alpacas API hier keine Cookies
+    nutzt (Header-basierte API-Key-Auth, frisch pro Aufruf erzeugt)
+    macht das praktische Risiko vermutlich klein, aber "vermutlich
+    klein" ist nicht dasselbe wie verifiziert sicher. Der tatsaechliche
+    Zeitgewinn waere ausserdem gering (gemessen: 0.64s + 0.19s
+    sequentiell -- Parallelisierung spart bestenfalls die kuerzere
+    Dauer, hier ca. 0.19s) und steht in keinem Verhaeltnis zum Risiko,
+    den gemeinsam genutzten Alpaca-Client eines Trading-Bots einer
+    nicht offiziell abgesicherten Nebenlaeufigkeits-Annahme auszusetzen.
+    Der dominierende Kostenfaktor war ohnehin _read_recent_trades()
+    (siehe deren Docstring) und der fehlende Cache (siehe
+    _get_status_cached) -- beide beheben den eigentlichen Engpass
+    bereits, ohne dieses Risiko einzugehen.
     """
     account = executor.get_account()
     positions = executor.get_all_positions()
@@ -200,6 +340,55 @@ def build_status_payload(executor: OrderExecutor, config: Config) -> dict:
         "recent_trades": _read_recent_trades(config.trade_log_path),
         "server_time": datetime.now(timezone.utc).isoformat(),
     }
+
+
+# Thread-sicherer In-Memory-Cache fuer /api/status (siehe STATUS_CACHE_SECONDS
+# oben) -- anders als der bestehende _equity_history_cache (dort reicht ein
+# unsynchronisiertes dict, siehe dessen Kommentar) bewusst mit einem Lock,
+# weil explizit angefordert und weil hier (im Gegensatz zum Equity-Cache)
+# auch ein kuenftiger threaded=True-Server ohne weitere Aenderung sicher
+# bleiben soll. Haelt EIN (Zeitstempel, Payload)-Tupel statt eines dicts pro
+# Schluessel -- es gibt nur einen Status, keine Varianten wie beim Zeitraum
+# der Equity-History.
+_status_cache_lock = threading.Lock()
+_status_cache: tuple[float, dict] | None = None
+
+
+def _get_status_cached(executor: OrderExecutor, config: Config) -> dict:
+    """Wie build_status_payload(), aber haelt das Ergebnis
+    STATUS_CACHE_SECONDS lang vor -- mehrfaches Neuladen der Seite oder
+    mehrere gleichzeitig offene Geraete loesen dadurch nicht bei jedem
+    Aufruf erneut zwei Alpaca-Calls und ein CSV-Lesen aus.
+
+    Bei einem Fehler (OrderExecutionError aus build_status_payload) wird
+    NICHTS gecacht und die Exception laeuft ungefangen durch -- die
+    aufrufende Flask-Route soll weiterhin den echten Fehler sehen und
+    NIE einen alten, evtl. laengst ueberholten Stand als "aktuell"
+    ausliefern, nur weil er zufaellig noch im Cache lag.
+    """
+    global _status_cache
+
+    now = time.monotonic()
+    with _status_cache_lock:
+        if _status_cache is not None and (now - _status_cache[0]) < STATUS_CACHE_SECONDS:
+            return _status_cache[1]
+
+    # Bewusst AUSSERHALB des Locks: build_status_payload() macht Netzwerk-
+    # Aufrufe (Alpaca) und liest trades.csv, beides kann je nach Umstaenden
+    # spuerbar dauern -- den Lock dafuer zu halten wuerde jeden anderen
+    # Request (auch auf andere Routen, die denselben Lock NICHT anfassen,
+    # waere kein Problem, aber jeden parallelen /api/status-Request schon)
+    # unnoetig lange blockieren, obwohl nur das kurze Lesen/Schreiben des
+    # Cache-Eintrags selbst geschuetzt werden muss. Ein seltener Doppel-
+    # Abruf bei exakt gleichzeitigem Cache-Miss (zwei Requests sehen beide
+    # "abgelaufen", fragen beide frisch ab) ist kein Korrektheitsproblem,
+    # nur minimal ineffizient -- und mit dem aktuell einzelnen Flask-
+    # Dev-Server (kein threaded=True, siehe main()) ohnehin unmoeglich.
+    payload = build_status_payload(executor, config)
+
+    with _status_cache_lock:
+        _status_cache = (now, payload)
+    return payload
 
 
 def _extract_equity_points(raw: dict) -> tuple[list[dict], float | None]:
@@ -345,10 +534,42 @@ def _get_equity_history_cached(executor: OrderExecutor, period_key: str) -> dict
     return payload
 
 
+def _maybe_gzip_response(response):
+    """Komprimiert den Response-Body mit gzip, wenn der Client es per
+    `Accept-Encoding` akzeptiert und sich das lohnt (ab GZIP_MIN_BYTES) --
+    bewusst nur die Python-Standardbibliothek (gzip), keine neue
+    Abhaengigkeit wie flask-compress noetig. Kleine Antworten (z.B. eine
+    leere Positionsliste) bleiben unkomprimiert, dafuer lohnt sich der
+    CPU-Aufwand auf dem Pi Zero nicht. Browser/fetch() entpacken ein
+    gzip-komprimiertes Accept-Encoding-Response automatisch, ganz ohne
+    Aenderung auf der Frontend-Seite.
+    """
+    accept_encoding = request.headers.get("Accept-Encoding", "")
+    if "gzip" not in accept_encoding.lower():
+        return response
+    if response.direct_passthrough or response.status_code >= 300:
+        return response
+
+    data = response.get_data()
+    if len(data) < GZIP_MIN_BYTES:
+        return response
+
+    compressed = gzip.compress(data, compresslevel=6)
+    response.set_data(compressed)
+    response.headers["Content-Encoding"] = "gzip"
+    response.headers["Content-Length"] = str(len(compressed))
+    # add() statt []= -- flask-cors setzt hier bereits "Vary: Origin"
+    # (siehe CORS(app) oben), ein "[]="  wuerde das klammheimlich
+    # ueberschreiben statt zu ergaenzen.
+    response.headers.add("Vary", "Accept-Encoding")
+    return response
+
+
 def create_app(executor: OrderExecutor, config: Config, token: str) -> Flask:
     app = Flask(__name__)
     CORS(app)  # index.html laeuft auf einer anderen Origin (GitHub Pages) --
     # die eigentliche Absicherung ist das Token, nicht die CORS-Origin.
+    app.after_request(_maybe_gzip_response)
 
     require_token = _require_token(token)
 
@@ -360,7 +581,7 @@ def create_app(executor: OrderExecutor, config: Config, token: str) -> Flask:
     @require_token
     def status():
         try:
-            payload = build_status_payload(executor, config)
+            payload = _get_status_cached(executor, config)
         except OrderExecutionError as exc:
             logger.error("Alpaca-Abfrage fehlgeschlagen: %s", exc)
             return jsonify({"error": f"Alpaca nicht erreichbar: {exc}"}), 502
